@@ -242,16 +242,16 @@ def train(config: TrainConfig) -> None:
                 device=device,
                 epoch=epoch + 1,
             )
-            metric_value = float(eval_result[config.best_metric])
-            tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.items() if isinstance(v, (int, float))}, step=epoch + 1)
+            metric_value = float(getattr(eval_result, config.best_metric))
+            tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, step=epoch + 1)
             if metric_value < best_metric_value:
                 best_metric_value = metric_value
                 save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
                 print(f"New best model saved: {config.best_metric}={best_metric_value:.6f}")
             print(
                 f"Eval @ epoch {epoch + 1}: "
-                f"FID={eval_result['fid']:.4f}, "
-                f"KID={eval_result['kid_mean']:.6f}±{eval_result['kid_std']:.6f}"
+                f"FID={eval_result.fid:.4f}, "
+                f"KID={eval_result.kid_mean:.6f}±{eval_result.kid_std:.6f}"
             )
 
     tracker.log_summary({"best_metric": best_metric_value, "last_epoch": config.epochs})

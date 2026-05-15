@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
 from src.config import TrainConfig
 from src.engine import train
@@ -8,35 +12,11 @@ from src.eval import evaluate
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Minecraft skin GAN training/evaluation CLI",
-    )
+    parser = argparse.ArgumentParser(description="Minecraft skin GAN training/evaluation CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    train_parser = subparsers.add_parser("train", help="Train DCGAN model")
-    train_parser.add_argument("--data-dir", default="data/skins")
-    train_parser.add_argument("--epochs", type=int, default=100)
-    train_parser.add_argument("--batch-size", type=int, default=256)
-    train_parser.add_argument("--z-dim", type=int, default=100)
-    train_parser.add_argument("--lr", type=float, default=2e-4)
-    train_parser.add_argument("--resume", default=None)
-    train_parser.add_argument("--seed", type=int, default=42)
-    train_parser.add_argument("--r1-gamma", type=float, default=10.0)
-    train_parser.add_argument("--r1-interval", type=int, default=16)
-    train_parser.add_argument("--compile", action="store_true")
-    train_parser.add_argument("--channels-last", action="store_true")
-    train_parser.add_argument("--amp-dtype", choices=["none", "bfloat16", "float16"], default="bfloat16")
-    train_parser.add_argument("--num-workers", type=int, default=8)
-    train_parser.add_argument("--persistent-workers", action="store_true")
-    train_parser.add_argument("--prefetch-factor", type=int, default=16)
-    train_parser.add_argument("--eval-every", type=int, default=10)
-    train_parser.add_argument("--eval-sample-count", type=int, default=2048)
-    train_parser.add_argument("--eval-seed", type=int, default=1234)
-    train_parser.add_argument("--eval-batch-size", type=int, default=64)
-    train_parser.add_argument("--eval-num-workers", type=int, default=2)
-    train_parser.add_argument("--eval-output-dir", default="outputs/eval")
-    train_parser.add_argument("--kid-subsets", type=int, default=50)
-    train_parser.add_argument("--kid-subset-size", type=int, default=32)
+    train_parser = subparsers.add_parser("train", help="Train DCGAN model with Hydra overrides")
+    train_parser.add_argument("overrides", nargs="*", help="Hydra style overrides (e.g., epochs=200 tracking.backend=wandb)")
 
     eval_parser = subparsers.add_parser("eval", help="Run FID/KID evaluation from a checkpoint")
     eval_parser.add_argument("--checkpoint", required=True)
@@ -51,25 +31,33 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--kid-subset-size", type=int, default=32)
     eval_parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
     eval_parser.add_argument("--epoch", type=int, default=None)
-
     return parser
 
 
+def _build_train_config(overrides: list[str]) -> TrainConfig:
+    with hydra.initialize_config_dir(version_base=None, config_dir=str(Path("conf").resolve())):
+        cfg: DictConfig = hydra.compose(config_name="train", overrides=overrides)
+    data = OmegaConf.to_container(cfg, resolve=True)
+    return TrainConfig(
+        **{k: Path(v) if k.endswith("_dir") or k in {"data_dir", "resume", "checkpoint_dir"} and v is not None else v for k, v in data.items() if k != "tracking"},
+        tracking=data["tracking"],
+    )
+
+
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+    args = build_parser().parse_args()
 
-    args_dict = vars(args).copy()
-    command = args_dict.pop("command", None)
+    if args.command == "train":
+        cfg = _build_train_config(args.overrides)
+        if isinstance(cfg.tracking, dict):
+            from src.config import TrackingConfig
 
-    if command == "train":
-        config = TrainConfig(**args_dict)
-        train(config)
+            cfg.tracking = TrackingConfig(**cfg.tracking)
+        train(cfg)
         return
 
-    if command == "eval":
+    if args.command == "eval":
         import torch
-        from pathlib import Path
 
         device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
         evaluate(
@@ -86,9 +74,6 @@ def main() -> None:
             device=device,
             epoch=args.epoch,
         )
-        return
-
-    parser.error("Unknown command")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from src.config import TrainConfig
 from src.data import SkinDataset
 from src.eval import evaluate
 from src.models import Discriminator, Generator
+from src.tracking import Tracker
 
 
 def _update_ema(ema_model: Generator, model: Generator, beta: float) -> None:
@@ -50,7 +51,8 @@ def train(config: TrainConfig) -> None:
     print(f"Using device: {device}")
 
     Path("outputs").mkdir(exist_ok=True)
-    Path("checkpoints").mkdir(exist_ok=True)
+    config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    tracker = Tracker(config.tracking, {"train": config.__dict__ | {"tracking": config.tracking.__dict__}})
 
     dataset = SkinDataset(config.data_dir)
     dataloader_kwargs = dict(
@@ -88,17 +90,24 @@ def train(config: TrainConfig) -> None:
     ada_seen = 0
 
     start_epoch = 0
-    if config.resume:
-        start_epoch = load_checkpoint(
-            config.resume,
+    best_metric_value = float("inf")
+    resume_path = config.resume
+    latest_path = config.checkpoint_dir / "latest.pt"
+    if resume_path is None and config.auto_resume and latest_path.exists():
+        resume_path = latest_path
+
+    if resume_path:
+        start_epoch, best_metric_value = load_checkpoint(
+            resume_path,
             generator,
             discriminator,
             opt_g,
             opt_d,
             device,
+            generator_ema=generator_ema,
         )
         _update_ema(generator_ema, generator, beta=0.0)
-        print(f"Resumed from epoch {start_epoch}")
+        print(f"Resumed from {resume_path} at epoch {start_epoch}")
 
     if config.compile:
         generator = torch.compile(generator)
@@ -182,16 +191,20 @@ def train(config: TrainConfig) -> None:
         with torch.no_grad():
             samples = generator_ema(fixed_noise).detach().cpu()
             samples = (samples + 1) / 2
-            save_image(samples, f"outputs/epoch_{epoch + 1:04d}.png", nrow=8)
+            sample_path = Path(f"outputs/epoch_{epoch + 1:04d}.png")
+            save_image(samples, sample_path, nrow=8)
 
-        save_checkpoint(Path("checkpoints") / "latest.pt", epoch, generator, discriminator, opt_g, opt_d)
+        tracker.log_metrics({"train/d_loss": float(d_loss.item()), "train/g_loss": float(g_loss.item()), "train/epoch": epoch + 1}, step=epoch + 1)
+        tracker.log_image("samples", sample_path, step=epoch + 1)
+
+        save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
 
         if (epoch + 1) % 10 == 0:
-            save_checkpoint(Path("checkpoints") / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d)
+            save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
 
         if config.eval_every > 0 and (epoch + 1) % config.eval_every == 0:
             eval_result = evaluate(
-                checkpoint=Path("checkpoints") / "latest.pt",
+                checkpoint=config.checkpoint_dir / "latest.pt",
                 real_dir=config.data_dir,
                 output_dir=config.eval_output_dir,
                 sample_count=config.eval_sample_count,
@@ -204,8 +217,16 @@ def train(config: TrainConfig) -> None:
                 device=device,
                 epoch=epoch + 1,
             )
+            metric_value = float(eval_result[config.best_metric])
+            tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.items() if isinstance(v, (int, float))}, step=epoch + 1)
+            if metric_value < best_metric_value:
+                best_metric_value = metric_value
+                save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
+                print(f"New best model saved: {config.best_metric}={best_metric_value:.6f}")
             print(
                 f"Eval @ epoch {epoch + 1}: "
                 f"FID={eval_result['fid']:.4f}, "
                 f"KID={eval_result['kid_mean']:.6f}±{eval_result['kid_std']:.6f}"
             )
+
+    tracker.close()

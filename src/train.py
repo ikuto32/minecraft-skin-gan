@@ -5,6 +5,7 @@ import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.nn.utils import spectral_norm
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -63,20 +64,19 @@ class Discriminator(nn.Module):
     def __init__(self, channels=4, features=64):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(channels, features, 4, 2, 1),
+            spectral_norm(nn.Conv2d(channels, features, 4, 2, 1)),
             nn.LeakyReLU(0.2, inplace=True),
 
             self._block(features, features * 2, 4, 2, 1),
             self._block(features * 2, features * 4, 4, 2, 1),
             self._block(features * 4, features * 8, 4, 2, 1),
 
-            nn.Conv2d(features * 8, 1, 4, 1, 0),
-            nn.Sigmoid(),
+            spectral_norm(nn.Conv2d(features * 8, 1, 4, 1, 0)),
         )
 
     def _block(self, in_c, out_c, kernel, stride, padding):
         return nn.Sequential(
-            nn.Conv2d(in_c, out_c, kernel, stride, padding, bias=False),
+            spectral_norm(nn.Conv2d(in_c, out_c, kernel, stride, padding, bias=False)),
             nn.BatchNorm2d(out_c),
             nn.LeakyReLU(0.2, inplace=True),
         )
@@ -113,6 +113,8 @@ def main():
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--r1-gamma", type=float, default=10.0)
+    parser.add_argument("--r1-interval", type=int, default=16)
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -139,8 +141,8 @@ def main():
     opt_g = optim.Adam(generator.parameters(), lr=args.lr, betas=(0.5, 0.999))
     opt_d = optim.Adam(discriminator.parameters(), lr=args.lr, betas=(0.5, 0.999))
 
-    criterion = nn.BCELoss()
     fixed_noise = torch.randn(64, args.z_dim, 1, 1, device=device)
+    global_step = 0
 
     start_epoch = 0
     if args.resume:
@@ -161,27 +163,37 @@ def main():
             real = real.to(device)
             batch_size = real.size(0)
 
-            real_labels = torch.ones(batch_size, device=device)
-            fake_labels = torch.zeros(batch_size, device=device)
-
             # Train Discriminator
             noise = torch.randn(batch_size, args.z_dim, 1, 1, device=device)
             fake = generator(noise)
 
             discriminator.zero_grad()
-
-            real_loss = criterion(discriminator(real), real_labels)
-            fake_loss = criterion(discriminator(fake.detach()), fake_labels)
+            d_real = discriminator(real)
+            d_fake = discriminator(fake.detach())
+            real_loss = torch.relu(1.0 - d_real).mean()
+            fake_loss = torch.relu(1.0 + d_fake).mean()
             d_loss = real_loss + fake_loss
+
+            r1_penalty = torch.tensor(0.0, device=device)
+            if args.r1_interval > 0 and global_step % args.r1_interval == 0:
+                real_for_r1 = real.detach().requires_grad_(True)
+                d_real_r1 = discriminator(real_for_r1)
+                real_grad = torch.autograd.grad(
+                    outputs=d_real_r1.sum(),
+                    inputs=real_for_r1,
+                    create_graph=True,
+                )[0]
+                r1_penalty = real_grad.pow(2).flatten(1).sum(1).mean()
+                d_loss = d_loss + 0.5 * args.r1_gamma * r1_penalty
 
             d_loss.backward()
             opt_d.step()
 
             # Train Generator
             generator.zero_grad()
-
-            output = discriminator(fake)
-            g_loss = criterion(output, real_labels)
+            fake_for_g = generator(noise)
+            output = discriminator(fake_for_g)
+            g_loss = -output.mean()
 
             g_loss.backward()
             opt_g.step()
@@ -189,7 +201,11 @@ def main():
             progress.set_postfix({
                 "D_loss": f"{d_loss.item():.4f}",
                 "G_loss": f"{g_loss.item():.4f}",
+                "d_real": f"{d_real.mean().item():.4f}",
+                "d_fake": f"{d_fake.mean().item():.4f}",
+                "r1_penalty": f"{r1_penalty.item():.4f}",
             })
+            global_step += 1
 
         with torch.no_grad():
             samples = generator(fixed_noise).detach().cpu()

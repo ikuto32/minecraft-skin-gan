@@ -2,6 +2,20 @@ import torch.nn as nn
 from torch.nn.utils import spectral_norm
 
 
+def _make_norm(norm_type: str, channels: int, spatial_size: int, num_groups: int = 8) -> nn.Module:
+    norm = norm_type.lower()
+    if norm == "batch":
+        return nn.BatchNorm2d(channels)
+    if norm == "group":
+        groups = min(num_groups, channels)
+        while channels % groups != 0 and groups > 1:
+            groups -= 1
+        return nn.GroupNorm(num_groups=groups, num_channels=channels)
+    if norm == "layer":
+        return nn.LayerNorm([channels, spatial_size, spatial_size])
+    raise ValueError(f"Unknown norm_type={norm_type!r}. Expected one of: batch, group, layer")
+
+
 class DCGANGenerator(nn.Module):
     def __init__(self, z_dim: int = 100, channels: int = 4, features: int = 64):
         super().__init__()
@@ -78,3 +92,45 @@ class DCGANImprovedDiscriminator(nn.Module):
 
     def forward(self, x):
         return self.net(x).view(-1)
+
+
+class ResConvGenerator(nn.Module):
+    def __init__(
+        self,
+        z_dim: int = 100,
+        channels: int = 4,
+        features: int = 64,
+        upsample_mode: str = "nearest",
+        norm_type: str = "group",
+    ):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Conv2d(z_dim, features * 8, kernel_size=4, stride=1, padding=0, bias=False),
+            _make_norm(norm_type=norm_type, channels=features * 8, spatial_size=4),
+            nn.ReLU(True),
+        )
+        self.up1 = self._up_block(features * 8, features * 4, spatial_size=8, upsample_mode=upsample_mode, norm_type=norm_type)
+        self.up2 = self._up_block(features * 4, features * 2, spatial_size=16, upsample_mode=upsample_mode, norm_type=norm_type)
+        self.up3 = self._up_block(features * 2, features, spatial_size=32, upsample_mode=upsample_mode, norm_type=norm_type)
+        self.up4 = self._up_block(features, features, spatial_size=64, upsample_mode=upsample_mode, norm_type=norm_type)
+        self.to_rgb = nn.Sequential(
+            nn.Conv2d(features, channels, kernel_size=3, stride=1, padding=1),
+            nn.Tanh(),
+        )
+
+    def _up_block(self, in_c: int, out_c: int, spatial_size: int, upsample_mode: str, norm_type: str) -> nn.Module:
+        align_corners = False if upsample_mode == "bilinear" else None
+        return nn.Sequential(
+            nn.Upsample(scale_factor=2, mode=upsample_mode, align_corners=align_corners),
+            nn.Conv2d(in_c, out_c, kernel_size=3, stride=1, padding=1, bias=False),
+            _make_norm(norm_type=norm_type, channels=out_c, spatial_size=spatial_size),
+            nn.ReLU(True),
+        )
+
+    def forward(self, z):
+        x = self.proj(z)
+        x = self.up1(x)
+        x = self.up2(x)
+        x = self.up3(x)
+        x = self.up4(x)
+        return self.to_rgb(x)

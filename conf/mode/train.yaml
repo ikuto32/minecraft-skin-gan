@@ -15,7 +15,7 @@ r1_interval: 16
 compile: false
 channels_last: true
 amp_dtype: bfloat16
-performance_profile: safe
+performance_profile: auto
 num_workers: 4
 persistent_workers: true
 prefetch_factor: 16

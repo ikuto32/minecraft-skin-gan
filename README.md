@@ -10,16 +10,16 @@ uv sync
 
 ## 学習（Hydra / OmegaConf）
 
-学習はHydra構成で実行します。`conf/train.yaml` がデフォルト設定です。
+学習/評価はHydra構成グループで実行します。`conf/config.yaml` の `defaults` で `mode=train` が選択されます。
 
 ```bash
-uv run python main.py train epochs=100 batch_size=64 data_dir=data/skins
+uv run python main.py mode=train epochs=100 batch_size=64 data_dir=data/skins
 ```
 
 主なoverride例:
 
 ```bash
-uv run python main.py train \
+uv run python main.py mode=train \
   epochs=200 \
   eval_every=10 \
   tracking.backend=wandb \
@@ -31,13 +31,13 @@ uv run python main.py train \
 ### W&B
 
 ```bash
-uv run python main.py train tracking.backend=wandb tracking.project=minecraft-skin-gan
+uv run python main.py mode=train tracking.backend=wandb tracking.project=minecraft-skin-gan
 ```
 
 ### MLflow
 
 ```bash
-uv run python main.py train \
+uv run python main.py mode=train \
   tracking.backend=mlflow \
   tracking.mlflow_tracking_uri=http://127.0.0.1:5000 \
   tracking.mlflow_experiment=minecraft-skin-gan
@@ -56,9 +56,9 @@ uv run python main.py train \
 ## Evaluation
 
 ```bash
-uv run python main.py eval \
-  --checkpoint checkpoints/latest.pt \
-  --real-dir data/skins \
-  --output-dir outputs/eval \
-  --sample-count 2048
+uv run python main.py mode=eval \
+  checkpoint=checkpoints/latest.pt \
+  real_dir=data/skins \
+  output_dir=outputs/eval \
+  sample_count=2048
 ```

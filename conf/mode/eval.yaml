@@ -1,0 +1,13 @@
+mode: eval
+checkpoint: checkpoints/latest.pt
+real_dir: data/skins
+output_dir: outputs/eval
+sample_count: 2048
+batch_size: 64
+z_dim: 100
+seed: 1234
+num_workers: 2
+kid_subsets: 50
+kid_subset_size: 32
+device: null
+epoch: null

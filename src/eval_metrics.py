@@ -62,6 +62,8 @@ def compute_metrics(
             fid.update(real_u8, real=True)
             kid.update(real_u8, real=True)
             seen += take
+        if seen < 2:
+            raise ValueError("Need at least 2 real samples to compute FID/KID metrics")
 
     if cache_real_only:
         return {
@@ -80,6 +82,8 @@ def compute_metrics(
         fid.update(fake_u8, real=False)
         kid.update(fake_u8, real=False)
         seen += take
+    if seen < 2:
+        raise ValueError("Need at least 2 generated samples to compute FID/KID metrics")
 
     fid_value = float(fid.compute().item())
     kid_mean, kid_std = kid.compute()

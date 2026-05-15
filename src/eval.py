@@ -85,6 +85,8 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = RealImageDataset(cfg.real_dir, resize=cfg.resize, color_mode=cfg.color_mode)
+    if cfg.sample_count < 2:
+        raise ValueError("sample_count must be >= 2 to compute FID/KID metrics")
     if cfg.sample_count > len(dataset):
         raise ValueError(f"sample_count ({cfg.sample_count}) must be <= number of real images ({len(dataset)})")
 

@@ -132,7 +132,7 @@ def train(config: TrainConfig) -> None:
         resume_path = latest_path
 
     if resume_path:
-        start_epoch, best_metric_value = load_checkpoint(
+        resume_info = load_checkpoint(
             resume_path,
             generator,
             discriminator,
@@ -141,8 +141,13 @@ def train(config: TrainConfig) -> None:
             device,
             generator_ema=generator_ema,
         )
+        start_epoch = resume_info["start_epoch"]
+        best_metric_value = resume_info["best_metric"]
         _update_ema(generator_ema, generator, beta=0.0)
-        print(f"Resumed from {resume_path} at epoch {start_epoch}")
+        print(
+            f"Resumed from {resume_path} at epoch {start_epoch} "
+            f"(schema_version={resume_info['schema_version']}, model_type={resume_info['model_type']})"
+        )
 
     if compile_enabled:
         generator = torch.compile(generator)
@@ -257,10 +262,10 @@ def train(config: TrainConfig) -> None:
         tracker.log_histogram("train/fake_pixel_distribution", samples, step=global_step)
         tracker.log_image("samples", sample_path, step=global_step)
 
-        save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
+        save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)
 
         if (epoch + 1) % 10 == 0:
-            save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
+            save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)
 
         if config.eval_every > 0 and (epoch + 1) % config.eval_every == 0:
             eval_result = evaluate(EvalConfig(
@@ -282,7 +287,7 @@ def train(config: TrainConfig) -> None:
             tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, step=epoch + 1)
             if metric_value < best_metric_value:
                 best_metric_value = metric_value
-                save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
+                save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)
                 print(f"New best model saved: {config.best_metric}={best_metric_value:.6f}")
             print(
                 f"Eval @ epoch {epoch + 1}: "

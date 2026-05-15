@@ -2,6 +2,8 @@ from pathlib import Path
 import argparse
 import random
 
+import contextlib
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -115,6 +117,12 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--r1-gamma", type=float, default=10.0)
     parser.add_argument("--r1-interval", type=int, default=16)
+    parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--channels-last", action="store_true")
+    parser.add_argument("--amp-dtype", choices=["none", "bfloat16", "float16"], default="bfloat16")
+    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--persistent-workers", action="store_true")
+    parser.add_argument("--prefetch-factor", type=int, default=2)
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -127,21 +135,30 @@ def main():
     Path("checkpoints").mkdir(exist_ok=True)
 
     dataset = SkinDataset(args.data_dir)
-    loader = DataLoader(
-        dataset,
+    dataloader_kwargs = dict(
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=2,
-        pin_memory=True,
+        num_workers=args.num_workers,
+        pin_memory=(device == "cuda"),
     )
+    if args.num_workers > 0:
+        dataloader_kwargs["persistent_workers"] = args.persistent_workers
+        dataloader_kwargs["prefetch_factor"] = args.prefetch_factor
 
-    generator = Generator(z_dim=args.z_dim).to(device)
-    discriminator = Discriminator().to(device)
+    loader = DataLoader(dataset, **dataloader_kwargs)
+
+    memory_format = torch.channels_last if args.channels_last else torch.contiguous_format
+
+    generator = Generator(z_dim=args.z_dim).to(device, memory_format=memory_format)
+    discriminator = Discriminator().to(device, memory_format=memory_format)
 
     opt_g = optim.Adam(generator.parameters(), lr=args.lr, betas=(0.5, 0.999))
     opt_d = optim.Adam(discriminator.parameters(), lr=args.lr, betas=(0.5, 0.999))
 
     fixed_noise = torch.randn(64, args.z_dim, 1, 1, device=device)
+    amp_enabled = device == "cuda" and args.amp_dtype != "none"
+    amp_dtype = torch.bfloat16 if args.amp_dtype == "bfloat16" else torch.float16
+    scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda" and args.amp_dtype == "float16")
     global_step = 0
 
     start_epoch = 0
@@ -156,28 +173,40 @@ def main():
         )
         print(f"Resumed from epoch {start_epoch}")
 
+    if args.compile:
+        generator = torch.compile(generator)
+        discriminator = torch.compile(discriminator)
+
     for epoch in range(start_epoch, args.epochs):
         progress = tqdm(loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
 
         for real in progress:
-            real = real.to(device)
+            real = real.to(device, non_blocking=(device == "cuda"))
+            if args.channels_last:
+                real = real.contiguous(memory_format=torch.channels_last)
             batch_size = real.size(0)
 
             # Train Discriminator
             noise = torch.randn(batch_size, args.z_dim, 1, 1, device=device)
-            fake = generator(noise)
+            def autocast_context():
+                if amp_enabled:
+                    return torch.autocast(device_type="cuda", dtype=amp_dtype)
+                return contextlib.nullcontext()
 
-            discriminator.zero_grad()
-            d_real = discriminator(real)
-            d_fake = discriminator(fake.detach())
-            real_loss = torch.relu(1.0 - d_real).mean()
-            fake_loss = torch.relu(1.0 + d_fake).mean()
-            d_loss = real_loss + fake_loss
+            discriminator.zero_grad(set_to_none=True)
+            with autocast_context():
+                fake = generator(noise)
+                d_real = discriminator(real)
+                d_fake = discriminator(fake.detach())
+                real_loss = torch.relu(1.0 - d_real).mean()
+                fake_loss = torch.relu(1.0 + d_fake).mean()
+                d_loss = real_loss + fake_loss
 
             r1_penalty = torch.tensor(0.0, device=device)
             if args.r1_interval > 0 and global_step % args.r1_interval == 0:
                 real_for_r1 = real.detach().requires_grad_(True)
-                d_real_r1 = discriminator(real_for_r1)
+                with autocast_context():
+                    d_real_r1 = discriminator(real_for_r1)
                 real_grad = torch.autograd.grad(
                     outputs=d_real_r1.sum(),
                     inputs=real_for_r1,
@@ -186,17 +215,19 @@ def main():
                 r1_penalty = real_grad.pow(2).flatten(1).sum(1).mean()
                 d_loss = d_loss + 0.5 * args.r1_gamma * r1_penalty
 
-            d_loss.backward()
-            opt_d.step()
+            scaler.scale(d_loss).backward()
+            scaler.step(opt_d)
 
             # Train Generator
-            generator.zero_grad()
-            fake_for_g = generator(noise)
-            output = discriminator(fake_for_g)
-            g_loss = -output.mean()
+            generator.zero_grad(set_to_none=True)
+            with autocast_context():
+                fake_for_g = generator(noise)
+                output = discriminator(fake_for_g)
+                g_loss = -output.mean()
 
-            g_loss.backward()
-            opt_g.step()
+            scaler.scale(g_loss).backward()
+            scaler.step(opt_g)
+            scaler.update()
 
             progress.set_postfix({
                 "D_loss": f"{d_loss.item():.4f}",

@@ -14,6 +14,8 @@ from torchvision import transforms
 from torchvision.utils import save_image
 from tqdm import tqdm
 
+from eval import evaluate
+
 
 class SkinDataset(Dataset):
     def __init__(self, image_dir: Path):
@@ -123,6 +125,14 @@ def main():
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--persistent-workers", action="store_true")
     parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--eval-every", type=int, default=10)
+    parser.add_argument("--eval-sample-count", type=int, default=2048)
+    parser.add_argument("--eval-seed", type=int, default=1234)
+    parser.add_argument("--eval-batch-size", type=int, default=64)
+    parser.add_argument("--eval-num-workers", type=int, default=2)
+    parser.add_argument("--eval-output-dir", type=Path, default=Path("outputs/eval"))
+    parser.add_argument("--kid-subsets", type=int, default=50)
+    parser.add_argument("--kid-subset-size", type=int, default=32)
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -260,6 +270,27 @@ def main():
                 discriminator,
                 opt_g,
                 opt_d,
+            )
+
+        if args.eval_every > 0 and (epoch + 1) % args.eval_every == 0:
+            eval_result = evaluate(
+                checkpoint=Path("checkpoints") / "latest.pt",
+                real_dir=args.data_dir,
+                output_dir=args.eval_output_dir,
+                sample_count=args.eval_sample_count,
+                batch_size=args.eval_batch_size,
+                z_dim=args.z_dim,
+                seed=args.eval_seed,
+                num_workers=args.eval_num_workers,
+                kid_subsets=args.kid_subsets,
+                kid_subset_size=args.kid_subset_size,
+                device=device,
+                epoch=epoch + 1,
+            )
+            print(
+                f"Eval @ epoch {epoch + 1}: "
+                f"FID={eval_result['fid']:.4f}, "
+                f"KID={eval_result['kid_mean']:.6f}±{eval_result['kid_std']:.6f}"
             )
 
 

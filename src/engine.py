@@ -178,15 +178,31 @@ def train(config: TrainConfig) -> None:
             scaler.update()
             _update_ema(generator_ema, generator, config.ema_beta)
 
+            d_real_mean = float(d_real.mean().item())
+            d_fake_mean = float(d_fake.mean().item())
+            d_loss_value = float(d_loss.item())
+            g_loss_value = float(g_loss.item())
+            r1_penalty_value = float(r1_penalty.item())
+
             progress.set_postfix({
-                "D_loss": f"{d_loss.item():.4f}",
-                "G_loss": f"{g_loss.item():.4f}",
-                "d_real": f"{d_real.mean().item():.4f}",
-                "d_fake": f"{d_fake.mean().item():.4f}",
-                "r1_penalty": f"{r1_penalty.item():.4f}",
+                "D_loss": f"{d_loss_value:.4f}",
+                "G_loss": f"{g_loss_value:.4f}",
+                "d_real": f"{d_real_mean:.4f}",
+                "d_fake": f"{d_fake_mean:.4f}",
+                "r1_penalty": f"{r1_penalty_value:.4f}",
                 "ada_p": f"{ada_p:.3f}",
             })
             global_step += 1
+            tracker.log_metrics({
+                "train/d_loss_step": d_loss_value,
+                "train/g_loss_step": g_loss_value,
+                "train/d_real_step": d_real_mean,
+                "train/d_fake_step": d_fake_mean,
+                "train/r1_penalty_step": r1_penalty_value,
+                "train/ada_p_step": ada_p,
+                "train/lr_g": float(opt_g.param_groups[0]["lr"]),
+                "train/lr_d": float(opt_d.param_groups[0]["lr"]),
+            }, step=global_step)
 
         with torch.no_grad():
             samples = generator_ema(fixed_noise).detach().cpu()
@@ -194,8 +210,17 @@ def train(config: TrainConfig) -> None:
             sample_path = Path(f"outputs/epoch_{epoch + 1:04d}.png")
             save_image(samples, sample_path, nrow=8)
 
-        tracker.log_metrics({"train/d_loss": float(d_loss.item()), "train/g_loss": float(g_loss.item()), "train/epoch": epoch + 1}, step=epoch + 1)
-        tracker.log_image("samples", sample_path, step=epoch + 1)
+        tracker.log_metrics({
+            "train/d_loss": d_loss_value,
+            "train/g_loss": g_loss_value,
+            "train/d_real": d_real_mean,
+            "train/d_fake": d_fake_mean,
+            "train/r1_penalty": r1_penalty_value,
+            "train/ada_p": ada_p,
+            "train/epoch": epoch + 1,
+        }, step=global_step)
+        tracker.log_histogram("train/fake_pixel_distribution", samples, step=global_step)
+        tracker.log_image("samples", sample_path, step=global_step)
 
         save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
 
@@ -229,4 +254,5 @@ def train(config: TrainConfig) -> None:
                 f"KID={eval_result['kid_mean']:.6f}±{eval_result['kid_std']:.6f}"
             )
 
+    tracker.log_summary({"best_metric": best_metric_value, "last_epoch": config.epochs})
     tracker.close()

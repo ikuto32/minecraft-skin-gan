@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import torch
+
 from src.config import TrackingConfig
 
 
@@ -16,6 +18,9 @@ class Tracker:
             import wandb
 
             self.run = wandb.init(project=cfg.project, name=cfg.run_name, entity=cfg.entity, config=full_config)
+            wandb.define_metric('train/step')
+            wandb.define_metric('train/*', step_metric='train/step')
+            wandb.define_metric('eval/*', step_metric='train/step')
         elif self.backend == "mlflow":
             import mlflow
 
@@ -29,7 +34,7 @@ class Tracker:
         if self.backend == "wandb":
             import wandb
 
-            wandb.log(metrics, step=step)
+            wandb.log(metrics | {"train/step": step}, step=step)
         elif self.backend == "mlflow":
             import mlflow
 
@@ -44,6 +49,24 @@ class Tracker:
             import mlflow
 
             mlflow.log_artifact(str(image_path), artifact_path=f"images/step_{step}")
+
+
+    def log_histogram(self, key: str, values: torch.Tensor, step: int) -> None:
+        if self.backend == "wandb":
+            import wandb
+
+            wandb.log({key: wandb.Histogram(values.detach().flatten().cpu().numpy()), "train/step": step}, step=step)
+
+    def log_summary(self, values: dict[str, float | int]) -> None:
+        if self.backend == "wandb":
+            import wandb
+
+            for key, value in values.items():
+                wandb.run.summary[key] = value
+        elif self.backend == "mlflow":
+            import mlflow
+
+            mlflow.log_metrics({f"summary/{k}": float(v) for k, v in values.items()})
 
     def close(self) -> None:
         if self.backend == "wandb":

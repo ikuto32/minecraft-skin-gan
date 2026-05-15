@@ -39,10 +39,14 @@ def _select_runtime_profile(config: TrainConfig, device: str) -> tuple[bool, str
         channels_last = cuda_available
         return compile_enabled, amp_dtype, channels_last
 
-    # auto profile
-    compile_enabled = cuda_available and has_compile and capability[0] >= 8
-    amp_dtype = "bfloat16" if supports_bf16 else ("float16" if cuda_available else "none")
-    channels_last = cuda_available
+    # auto profile with explicit config precedence
+    auto_compile = cuda_available and has_compile and capability[0] >= 8
+    auto_amp_dtype = "bfloat16" if supports_bf16 else ("float16" if cuda_available else "none")
+    auto_channels_last = cuda_available
+
+    compile_enabled = config.compile if config.compile != auto_compile else auto_compile
+    amp_dtype = config.amp_dtype if config.amp_dtype != auto_amp_dtype else auto_amp_dtype
+    channels_last = config.channels_last if config.channels_last != auto_channels_last else auto_channels_last
     return compile_enabled, amp_dtype, channels_last
 
 

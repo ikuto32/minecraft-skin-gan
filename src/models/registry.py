@@ -7,6 +7,7 @@ from src.models.dcgan import (
     DCGANGenerator,
     DCGANImprovedDiscriminator,
     DCGANImprovedGenerator,
+    ResNetDiscriminator64,
     ResConvGenerator,
 )
 
@@ -32,6 +33,12 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         generator_hparams={"features": 64, "channels": 4},
         discriminator_hparams={"features": 48, "channels": 4},
     ),
+    "dcgan_resd": ModelSpec(
+        generator_cls=DCGANGenerator,
+        discriminator_cls=ResNetDiscriminator64,
+        generator_hparams={"features": 64, "channels": 4},
+        discriminator_hparams={"features": 64, "channels": 4},
+
     "gan_resconv_v1": ModelSpec(
         generator_cls=ResConvGenerator,
         discriminator_cls=DCGANImprovedDiscriminator,

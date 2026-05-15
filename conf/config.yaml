@@ -1,0 +1,3 @@
+defaults:
+  - mode: train
+  - _self_

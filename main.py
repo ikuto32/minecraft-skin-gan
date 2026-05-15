@@ -1,15 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from pydantic import ValidationError
 
-from src.config import (
-    EvalConfig,
-    TrackingConfig,
-    TrainConfig,
-    validate_tracking_config,
-    validate_train_config,
-)
+from src.config import EvalConfig, TrainConfig, format_validation_error
 from src.engine import train
 from src.eval import evaluate
 
@@ -45,19 +42,13 @@ def _mode_name(cfg: DictConfig) -> str | None:
 def _build_train_config(cfg: DictConfig) -> TrainConfig:
     data = OmegaConf.to_container(_mode_payload(cfg), resolve=True)
     assert isinstance(data, dict)
-    tracking = TrackingConfig(**data["tracking"])
     data.pop("mode", None)
-    data.pop("tracking", None)
     data["eval_seeds"] = _parse_seed_list(data.get("eval_seeds"))
-    return TrainConfig(**data, tracking=tracking)
-
-
-def _validate_composed_train_config(cfg: TrainConfig) -> None:
     try:
-        validate_tracking_config(cfg.tracking)
-        validate_train_config(cfg)
-    except ValueError as exc:
-        raise SystemExit(f"Invalid train config: {exc}") from exc
+        return TrainConfig.model_validate(data)
+    except ValidationError as exc:
+        formatted = format_validation_error(exc, root="train")
+        raise SystemExit(json.dumps({"error": formatted.title, "details": formatted.details}, ensure_ascii=False)) from exc
 
 
 def _build_eval_config(cfg: DictConfig) -> EvalConfig:
@@ -65,7 +56,11 @@ def _build_eval_config(cfg: DictConfig) -> EvalConfig:
     assert isinstance(data, dict)
     data.pop("mode", None)
     data["seeds"] = _parse_seed_list(data.get("seeds"))
-    return EvalConfig(**data)
+    try:
+        return EvalConfig.model_validate(data)
+    except ValidationError as exc:
+        formatted = format_validation_error(exc, root="eval")
+        raise SystemExit(json.dumps({"error": formatted.title, "details": formatted.details}, ensure_ascii=False)) from exc
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")

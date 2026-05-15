@@ -1,3 +1,4 @@
+model_name: dcgan_baseline
 mode: eval
 checkpoint: checkpoints/latest.pt
 real_dir: data/skins
@@ -9,7 +10,7 @@ seed: 1234
 deterministic: true
 cudnn_benchmark: false
 seeds: null
-num_workers: 2
+num_workers: 0
 kid_subsets: 50
 kid_subset_size: 32
 device: null

@@ -8,7 +8,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.kid import KernelInceptionDistance
 
 from src.config import EvalConfig
-from src.models import Generator
+import torch.nn as nn
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,7 @@ def to_uint8_rgb(batch: torch.Tensor) -> torch.Tensor:
     return (batch.clamp(0, 1) * 255).round().to(torch.uint8)
 
 
-def generate_fake_batch(generator: Generator, noise: torch.Tensor) -> torch.Tensor:
+def generate_fake_batch(generator: nn.Module, noise: torch.Tensor) -> torch.Tensor:
     with torch.no_grad():
         fake = generator(noise)
     return (fake + 1.0) / 2.0
@@ -34,7 +34,7 @@ def compute_metrics(
     *,
     cfg: EvalConfig,
     loader: DataLoader,
-    generator: Generator,
+    generator: nn.Module,
     device: str,
     real_features_state: dict[str, object] | None,
     cache_real_only: bool,

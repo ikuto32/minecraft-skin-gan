@@ -1,3 +1,4 @@
+model_name: dcgan_baseline
 mode: train
 data_dir: data/skins
 epochs: 100

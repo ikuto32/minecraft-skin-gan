@@ -4,6 +4,7 @@ import copy
 import random
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
@@ -13,7 +14,7 @@ from src.checkpoint import load_checkpoint, save_checkpoint
 from src.config import EvalConfig, TrainConfig
 from src.data import SkinDataset
 from src.eval import evaluate
-from src.models import Discriminator, Generator
+from src.models import resolve_model
 from src.tracking import Tracker
 
 
@@ -45,7 +46,7 @@ def _select_runtime_profile(config: TrainConfig, device: str) -> tuple[bool, str
     return compile_enabled, amp_dtype, channels_last
 
 
-def _update_ema(ema_model: Generator, model: Generator, beta: float) -> None:
+def _update_ema(ema_model: nn.Module, model: nn.Module, beta: float) -> None:
     with torch.no_grad():
         for ema_param, param in zip(ema_model.parameters(), model.parameters(), strict=True):
             ema_param.lerp_(param.detach(), 1.0 - beta)
@@ -96,7 +97,24 @@ def train(config: TrainConfig) -> None:
 
     Path("outputs").mkdir(exist_ok=True)
     config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    tracker = Tracker(config.tracking, {"train": config.__dict__ | {"tracking": config.tracking.__dict__}})
+    runtime_profile = {
+        "compile": compile_enabled,
+        "amp_dtype": amp_dtype_name,
+        "channels_last": channels_last_enabled,
+        "performance_profile": config.performance_profile,
+    }
+    tracker = Tracker(
+        config.tracking,
+        {"train": config.__dict__ | {"tracking": config.tracking.__dict__}},
+        runtime_profile=runtime_profile,
+    )
+
+    tracker.log_summary({
+        "runtime/compile": int(compile_enabled),
+        "runtime/channels_last": int(channels_last_enabled),
+        "runtime/amp_dtype_is_bfloat16": int(amp_dtype_name == "bfloat16"),
+        "runtime/amp_dtype_is_float16": int(amp_dtype_name == "float16"),
+    })
 
     dataset = SkinDataset(config.data_dir)
     dataloader_kwargs = dict(
@@ -117,13 +135,14 @@ def train(config: TrainConfig) -> None:
 
     memory_format = torch.channels_last if channels_last_enabled else torch.contiguous_format
 
-    generator = Generator(z_dim=config.z_dim).to(device, memory_format=memory_format)
+    model_spec = resolve_model(config.model_name)
+    generator = model_spec.generator_cls(z_dim=config.z_dim, **model_spec.generator_hparams).to(device, memory_format=memory_format)
     generator_ema = copy.deepcopy(generator).to(device, memory_format=memory_format)
     generator_ema.eval()
     for p in generator_ema.parameters():
         p.requires_grad_(False)
 
-    discriminator = Discriminator().to(device, memory_format=memory_format)
+    discriminator = model_spec.discriminator_cls(**model_spec.discriminator_hparams).to(device, memory_format=memory_format)
 
     opt_g = optim.Adam(generator.parameters(), lr=config.lr, betas=(0.5, 0.999))
     opt_d = optim.Adam(discriminator.parameters(), lr=config.lr, betas=(0.5, 0.999))
@@ -153,6 +172,8 @@ def train(config: TrainConfig) -> None:
             opt_d,
             device,
             generator_ema=generator_ema,
+            expected_model_name=config.model_name,
+            expected_model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams},
         )
         start_epoch = resume_info["start_epoch"]
         best_metric_value = resume_info["best_metric"]
@@ -276,10 +297,10 @@ def train(config: TrainConfig) -> None:
         tracker.log_image("samples", sample_path, step=global_step)
         tracker.log_artifact(sample_path, artifact_path=f"images/epoch_{epoch + 1:04d}")
 
-        save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)
+        save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
 
         if (epoch + 1) % 10 == 0:
-            save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)
+            save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
 
         if config.eval_every > 0 and (epoch + 1) % config.eval_every == 0:
             eval_result = evaluate(EvalConfig(
@@ -290,6 +311,7 @@ def train(config: TrainConfig) -> None:
                 batch_size=config.eval_batch_size,
                 z_dim=config.z_dim,
                 seed=config.eval_seed,
+                model_name=config.model_name,
                 seeds=config.eval_seeds,
                 num_workers=config.eval_num_workers,
                 kid_subsets=config.kid_subsets,
@@ -303,7 +325,7 @@ def train(config: TrainConfig) -> None:
             tracker.log_artifact(config.eval_output_dir / "metrics_history.csv", artifact_path="eval")
             if metric_value < best_metric_value:
                 best_metric_value = metric_value
-                save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)
+                save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
                 print(f"New best model saved: {config.best_metric}={best_metric_value:.6f}")
             print(
                 f"Eval @ epoch {epoch + 1}: "

@@ -15,7 +15,9 @@ from src.config import EvalConfig
 from src.eval_io import EvalResult, append_metrics_history, save_latest_metrics
 from src.eval_metrics import compute_metrics
 from src.eval_plot import plot_metrics
-from src.models import Generator
+from src.models import resolve_model
+
+REAL_FEATURES_CACHE_VERSION = 2
 
 
 class RealImageDataset(Dataset):
@@ -41,16 +43,31 @@ class RealImageDataset(Dataset):
 
 
 def _real_features_cache_path(cfg: EvalConfig) -> Path:
+    dataset_fingerprint = _dataset_fingerprint(cfg.real_dir)
     cache_key = {
-        "real_dir": str(cfg.real_dir.resolve()),
-        "image_count": cfg.sample_count,
+        "fingerprint": dataset_fingerprint,
         "resize": cfg.resize,
         "color_mode": cfg.color_mode,
+        "sample_count": cfg.sample_count,
     }
     digest = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return cfg.output_dir / "cache" / f"real_features_{digest}.pt"
 
-  
+
+def _dataset_fingerprint(real_dir: Path) -> str:
+    entries: list[dict[str, int | str]] = []
+    for path in sorted(p for p in real_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}):
+        stat = path.stat()
+        entries.append({
+            "path": str(path.resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        })
+    if not entries:
+        raise ValueError(f"No images found in {real_dir}")
+    return hashlib.sha256(json.dumps(entries, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def _seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     random.seed(worker_seed)
@@ -83,20 +100,23 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
         generator=dataloader_gen,
     )
 
-    generator = Generator(z_dim=cfg.z_dim).to(device)
+    model_spec = resolve_model(cfg.model_name)
+    generator = model_spec.generator_cls(z_dim=cfg.z_dim, **model_spec.generator_hparams).to(device)
     ckpt = torch.load(cfg.checkpoint, map_location=device)
     generator.load_state_dict(ckpt["generator"])
     generator.eval()
 
     seeds = cfg.seeds or [cfg.seed]
 
+    dataset_fingerprint = _dataset_fingerprint(cfg.real_dir)
     real_features_cache_path = _real_features_cache_path(cfg)
     real_metrics_state = None
     if cfg.reuse_real_features and real_features_cache_path.exists():
         cached = torch.load(real_features_cache_path, map_location="cpu")
         expected_meta = {
-            "real_dir": str(cfg.real_dir.resolve()),
-            "image_count": cfg.sample_count,
+            "cache_version": REAL_FEATURES_CACHE_VERSION,
+            "dataset_fingerprint": dataset_fingerprint,
+            "sample_count": cfg.sample_count,
             "resize": cfg.resize,
             "color_mode": cfg.color_mode,
         }
@@ -117,8 +137,9 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
             torch.save(
                 {
                     "meta": {
-                        "real_dir": str(cfg.real_dir.resolve()),
-                        "image_count": cfg.sample_count,
+                        "cache_version": REAL_FEATURES_CACHE_VERSION,
+                        "dataset_fingerprint": dataset_fingerprint,
+                        "sample_count": cfg.sample_count,
                         "resize": cfg.resize,
                         "color_mode": cfg.color_mode,
                     },

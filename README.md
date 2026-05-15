@@ -75,3 +75,10 @@ uv run python main.py mode=eval \
   output_dir=outputs/eval \
   sample_count=2048
 ```
+
+
+## DataLoader worker設定
+
+- `num_workers` / `eval_num_workers` は `0` を許容します（シングルプロセスDataLoader）。
+- `prefetch_factor` は `num_workers > 0` のときだけ有効です。`num_workers=0` の場合は `prefetch_factor=null` にしてください。
+- デフォルト例として `conf/mode/eval.yaml` は `num_workers: 0` を使用しています。

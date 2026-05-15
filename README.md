@@ -26,6 +26,19 @@ uv run python main.py mode=train \
   tracking.project=minecraft-skin-gan
 ```
 
+### パフォーマンスプロファイル
+
+- `performance_profile=auto`（推奨）: 実行時に `device` / GPU世代（compute capability）/ PyTorch runtime capability を見て、`compile`・`amp_dtype`・`channels_last` を自動選択します。
+- `performance_profile=safe`: デバッグ向けの安全設定です。`compile` 無効、AMP 無効、`channels_last` 無効。
+- `performance_profile=max`: 可能な範囲で高速化設定を有効化します。
+
+例:
+
+```bash
+uv run python main.py mode=train performance_profile=auto
+uv run python main.py mode=train performance_profile=safe
+```
+
 ## 追跡（W&B / MLflow）
 
 ### W&B

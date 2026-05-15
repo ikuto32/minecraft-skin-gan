@@ -8,6 +8,7 @@ from src.models.dcgan import (
     DCGANImprovedDiscriminator,
     DCGANImprovedGenerator,
     ResNetDiscriminator64,
+    ResConvGenerator,
 )
 
 
@@ -15,8 +16,8 @@ from src.models.dcgan import (
 class ModelSpec:
     generator_cls: type
     discriminator_cls: type
-    generator_hparams: dict[str, int]
-    discriminator_hparams: dict[str, int]
+    generator_hparams: dict[str, object]
+    discriminator_hparams: dict[str, object]
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
@@ -37,6 +38,17 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         discriminator_cls=ResNetDiscriminator64,
         generator_hparams={"features": 64, "channels": 4},
         discriminator_hparams={"features": 64, "channels": 4},
+
+    "gan_resconv_v1": ModelSpec(
+        generator_cls=ResConvGenerator,
+        discriminator_cls=DCGANImprovedDiscriminator,
+        generator_hparams={
+            "features": 64,
+            "channels": 4,
+            "upsample_mode": "nearest",
+            "norm_type": "group",
+        },
+        discriminator_hparams={"features": 48, "channels": 4},
     ),
 }
 

@@ -17,6 +17,28 @@ from src.models import Discriminator, Generator
 from src.tracking import Tracker
 
 
+def _select_runtime_profile(config: TrainConfig, device: str) -> tuple[bool, str, bool]:
+    if config.performance_profile == "safe":
+        return False, "none", False
+
+    cuda_available = device == "cuda"
+    has_compile = hasattr(torch, "compile")
+    capability = torch.cuda.get_device_capability() if cuda_available else (0, 0)
+    supports_bf16 = cuda_available and torch.cuda.is_bf16_supported()
+
+    if config.performance_profile == "max":
+        compile_enabled = cuda_available and has_compile
+        amp_dtype = "bfloat16" if supports_bf16 else ("float16" if cuda_available else "none")
+        channels_last = cuda_available
+        return compile_enabled, amp_dtype, channels_last
+
+    # auto profile
+    compile_enabled = cuda_available and has_compile and capability[0] >= 8
+    amp_dtype = "bfloat16" if supports_bf16 else ("float16" if cuda_available else "none")
+    channels_last = cuda_available
+    return compile_enabled, amp_dtype, channels_last
+
+
 def _update_ema(ema_model: Generator, model: Generator, beta: float) -> None:
     with torch.no_grad():
         for ema_param, param in zip(ema_model.parameters(), model.parameters(), strict=True):
@@ -50,6 +72,19 @@ def train(config: TrainConfig) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    compile_enabled, amp_dtype_name, channels_last_enabled = _select_runtime_profile(config, device)
+    if device == "cuda":
+        gpu_name = torch.cuda.get_device_name()
+        capability = torch.cuda.get_device_capability()
+        print(f"GPU: {gpu_name} (compute capability {capability[0]}.{capability[1]})")
+    else:
+        print("GPU: not available (CPU runtime)")
+    print(
+        "Performance profile="
+        f"{config.performance_profile} -> compile={compile_enabled}, "
+        f"amp_dtype={amp_dtype_name}, channels_last={channels_last_enabled}"
+    )
+
     Path("outputs").mkdir(exist_ok=True)
     config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
     tracker = Tracker(config.tracking, {"train": config.__dict__ | {"tracking": config.tracking.__dict__}})
@@ -67,7 +102,7 @@ def train(config: TrainConfig) -> None:
 
     loader = DataLoader(dataset, **dataloader_kwargs)
 
-    memory_format = torch.channels_last if config.channels_last else torch.contiguous_format
+    memory_format = torch.channels_last if channels_last_enabled else torch.contiguous_format
 
     generator = Generator(z_dim=config.z_dim).to(device, memory_format=memory_format)
     generator_ema = copy.deepcopy(generator).to(device, memory_format=memory_format)
@@ -81,9 +116,9 @@ def train(config: TrainConfig) -> None:
     opt_d = optim.Adam(discriminator.parameters(), lr=config.lr, betas=(0.5, 0.999))
 
     fixed_noise = torch.randn(64, config.z_dim, 1, 1, device=device)
-    amp_enabled = device == "cuda" and config.amp_dtype != "none"
-    amp_dtype = torch.bfloat16 if config.amp_dtype == "bfloat16" else torch.float16
-    scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda" and config.amp_dtype == "float16")
+    amp_enabled = device == "cuda" and amp_dtype_name != "none"
+    amp_dtype = torch.bfloat16 if amp_dtype_name == "bfloat16" else torch.float16
+    scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda" and amp_dtype_name == "float16")
     global_step = 0
     ada_p = 0.0
     ada_sign_accum = 0.0
@@ -109,7 +144,7 @@ def train(config: TrainConfig) -> None:
         _update_ema(generator_ema, generator, beta=0.0)
         print(f"Resumed from {resume_path} at epoch {start_epoch}")
 
-    if config.compile:
+    if compile_enabled:
         generator = torch.compile(generator)
         discriminator = torch.compile(discriminator)
 
@@ -118,7 +153,7 @@ def train(config: TrainConfig) -> None:
 
         for real in progress:
             real = real.to(device, non_blocking=(device == "cuda"))
-            if config.channels_last:
+            if channels_last_enabled:
                 real = real.contiguous(memory_format=torch.channels_last)
             batch_size = real.size(0)
 

@@ -39,6 +39,7 @@ class TrainConfig:
     compile: bool = False
     channels_last: bool = False
     amp_dtype: Literal["none", "float16", "bfloat16"] = "bfloat16"
+    performance_profile: Literal["auto", "safe", "max"] = "auto"
     num_workers: int = 2
     persistent_workers: bool = False
     prefetch_factor: int = 2
@@ -92,6 +93,8 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError("best_metric must be one of: 'fid', 'kid_mean'")
     if cfg.amp_dtype not in {"none", "float16", "bfloat16"}:
         raise ValueError("amp_dtype must be one of: 'none', 'float16', 'bfloat16'")
+    if cfg.performance_profile not in {"auto", "safe", "max"}:
+        raise ValueError("performance_profile must be one of: 'auto', 'safe', 'max'")
 
 
 @dataclass

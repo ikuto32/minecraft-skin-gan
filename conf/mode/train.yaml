@@ -8,13 +8,13 @@ resume: null
 auto_resume: true
 seed: 42
 deterministic: true
-cudnn_benchmark: false
+cudnn_benchmark: true
 r1_gamma: 10.0
 r1_interval: 16
 compile: false
-channels_last: false
+channels_last: true
 amp_dtype: bfloat16
-performance_profile: auto
+performance_profile: safe
 num_workers: 4
 persistent_workers: true
 prefetch_factor: 16

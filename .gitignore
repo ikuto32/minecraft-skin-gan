@@ -15,5 +15,6 @@ __pycache__/
 data/
 outputs/
 checkpoints/
+wandb/
 
 .DS_Store

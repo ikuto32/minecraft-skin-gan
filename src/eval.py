@@ -50,9 +50,20 @@ def _real_features_cache_path(cfg: EvalConfig) -> Path:
     digest = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return cfg.output_dir / "cache" / f"real_features_{digest}.pt"
 
+  
+def _seed_worker(worker_id: int) -> None:
+    worker_seed = torch.initial_seed() % (2**32)
+    random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
+    
 def evaluate(cfg: EvalConfig) -> EvalResult:
     device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    torch.use_deterministic_algorithms(cfg.deterministic)
+    torch.backends.cudnn.benchmark = cfg.cudnn_benchmark
+    torch.backends.cudnn.deterministic = cfg.deterministic
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -60,12 +71,16 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     if cfg.sample_count > len(dataset):
         raise ValueError(f"sample_count ({cfg.sample_count}) must be <= number of real images ({len(dataset)})")
 
+    dataloader_gen = torch.Generator()
+    dataloader_gen.manual_seed(cfg.seed)
     loader = DataLoader(
         dataset,
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=cfg.num_workers,
         pin_memory=(device == "cuda"),
+        worker_init_fn=_seed_worker,
+        generator=dataloader_gen,
     )
 
     generator = Generator(z_dim=cfg.z_dim).to(device)

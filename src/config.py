@@ -34,6 +34,8 @@ class TrainConfig:
     resume: Path | None = None
     auto_resume: bool = True
     seed: int = 42
+    deterministic: bool = True
+    cudnn_benchmark: bool = False
     r1_gamma: float = 10.0
     r1_interval: int = 16
     compile: bool = False
@@ -107,6 +109,8 @@ class EvalConfig:
     batch_size: int = 64
     z_dim: int = 100
     seed: int = 1234
+    deterministic: bool = True
+    cudnn_benchmark: bool = False
     seeds: list[int] | None = None
     num_workers: int = 2
     kid_subsets: int = 50

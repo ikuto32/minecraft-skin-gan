@@ -17,6 +17,12 @@ from src.models import Discriminator, Generator
 from src.tracking import Tracker
 
 
+def _seed_worker(worker_id: int) -> None:
+    worker_seed = torch.initial_seed() % (2**32)
+    random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
+
+
 def _select_runtime_profile(config: TrainConfig, device: str) -> tuple[bool, str, bool]:
     if config.performance_profile == "safe":
         return False, "none", False
@@ -68,6 +74,9 @@ def _augment(images: torch.Tensor, p: float) -> torch.Tensor:
 def train(config: TrainConfig) -> None:
     random.seed(config.seed)
     torch.manual_seed(config.seed)
+    torch.use_deterministic_algorithms(config.deterministic)
+    torch.backends.cudnn.benchmark = config.cudnn_benchmark
+    torch.backends.cudnn.deterministic = config.deterministic
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -95,7 +104,11 @@ def train(config: TrainConfig) -> None:
         shuffle=True,
         num_workers=config.num_workers,
         pin_memory=(device == "cuda"),
+        worker_init_fn=_seed_worker,
     )
+    dataloader_gen = torch.Generator()
+    dataloader_gen.manual_seed(config.seed)
+    dataloader_kwargs["generator"] = dataloader_gen
     if config.num_workers > 0:
         dataloader_kwargs["persistent_workers"] = config.persistent_workers
         dataloader_kwargs["prefetch_factor"] = config.prefetch_factor

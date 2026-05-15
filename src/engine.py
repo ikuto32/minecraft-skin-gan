@@ -258,9 +258,10 @@ def train(config: TrainConfig) -> None:
             "train/r1_penalty": r1_penalty_value,
             "train/ada_p": ada_p,
             "train/epoch": epoch + 1,
-        }, step=global_step)
+        }, step=global_step, epoch=epoch + 1)
         tracker.log_histogram("train/fake_pixel_distribution", samples, step=global_step)
         tracker.log_image("samples", sample_path, step=global_step)
+        tracker.log_artifact(sample_path, artifact_path=f"images/epoch_{epoch + 1:04d}")
 
         save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)
 
@@ -284,7 +285,9 @@ def train(config: TrainConfig) -> None:
                 epoch=epoch + 1,
             ))
             metric_value = float(getattr(eval_result, config.best_metric))
-            tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, step=epoch + 1)
+            tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, epoch=epoch + 1)
+            tracker.log_artifact(config.eval_output_dir / "latest_metrics.json", artifact_path="eval")
+            tracker.log_artifact(config.eval_output_dir / "metrics_history.csv", artifact_path="eval")
             if metric_value < best_metric_value:
                 best_metric_value = metric_value
                 save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config)

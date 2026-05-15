@@ -5,7 +5,7 @@ import subprocess
 
 import torch
 
-CURRENT_CHECKPOINT_SCHEMA_VERSION = 1
+CURRENT_CHECKPOINT_SCHEMA_VERSION = 2
 
 
 def _summarize_train_config(train_config) -> dict[str, object]:
@@ -50,9 +50,13 @@ def save_checkpoint(
     generator_ema=None,
     best_metric: float | None = None,
     train_config=None,
+    model_name: str = "unknown",
+    model_hparams: dict[str, object] | None = None,
 ):
     payload = {
         "schema_version": CURRENT_CHECKPOINT_SCHEMA_VERSION,
+        "model_name": model_name,
+        "model_hparams": model_hparams or {},
         "model_type": {
             "generator": generator.__class__.__name__,
             "discriminator": discriminator.__class__.__name__,
@@ -72,13 +76,20 @@ def save_checkpoint(
     torch.save(payload, path)
 
 
-def load_checkpoint(path: Path, generator, discriminator, opt_g, opt_d, device: str, *, generator_ema=None):
+def load_checkpoint(path: Path, generator, discriminator, opt_g, opt_d, device: str, *, generator_ema=None, expected_model_name: str | None = None, expected_model_hparams: dict[str, object] | None = None):
     ckpt = torch.load(path, map_location=device)
     schema_version = int(ckpt.get("schema_version", 0))
     if schema_version != CURRENT_CHECKPOINT_SCHEMA_VERSION:
         raise ValueError(
             f"Incompatible checkpoint schema_version={schema_version} (expected {CURRENT_CHECKPOINT_SCHEMA_VERSION})"
         )
+
+    actual_model_name = ckpt.get("model_name")
+    actual_model_hparams = ckpt.get("model_hparams", {})
+    if expected_model_name is not None and actual_model_name != expected_model_name:
+        raise ValueError(f"Checkpoint model_name mismatch: {actual_model_name!r} != {expected_model_name!r}")
+    if expected_model_hparams is not None and actual_model_hparams != expected_model_hparams:
+        raise ValueError("Checkpoint model_hparams mismatch")
 
     generator.load_state_dict(ckpt["generator"])
     discriminator.load_state_dict(ckpt["discriminator"])
@@ -91,4 +102,6 @@ def load_checkpoint(path: Path, generator, discriminator, opt_g, opt_d, device: 
         "best_metric": float(ckpt.get("best_metric", float("inf"))),
         "schema_version": schema_version,
         "model_type": ckpt.get("model_type"),
+        "model_name": actual_model_name,
+        "model_hparams": actual_model_hparams,
     }

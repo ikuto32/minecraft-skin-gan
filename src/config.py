@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 
 def _ensure_path(value: Path | str | None) -> Path | None:
@@ -15,7 +16,7 @@ def _validate_positive(name: str, value: int) -> None:
 
 @dataclass
 class TrackingConfig:
-    backend: str = "none"  # none|wandb|mlflow
+    backend: Literal["none", "wandb", "mlflow"] = "none"
     project: str = "minecraft-skin-gan"
     run_name: str | None = None
     entity: str | None = None
@@ -37,7 +38,7 @@ class TrainConfig:
     r1_interval: int = 16
     compile: bool = False
     channels_last: bool = False
-    amp_dtype: str = "bfloat16"
+    amp_dtype: Literal["none", "float16", "bfloat16"] = "bfloat16"
     num_workers: int = 2
     persistent_workers: bool = False
     prefetch_factor: int = 2
@@ -55,7 +56,7 @@ class TrainConfig:
     ada_interval: int = 4
     ada_speed: float = 0.001
     checkpoint_dir: Path = Path("checkpoints")
-    best_metric: str = "fid"  # fid|kid_mean
+    best_metric: Literal["fid", "kid_mean"] = "fid"
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
 
     def __post_init__(self) -> None:
@@ -68,6 +69,29 @@ class TrainConfig:
         _validate_positive("batch_size", self.batch_size)
         _validate_positive("z_dim", self.z_dim)
         _validate_positive("num_workers", self.num_workers)
+        _validate_positive("r1_interval", self.r1_interval)
+        _validate_positive("eval_every", self.eval_every)
+        _validate_positive("eval_sample_count", self.eval_sample_count)
+        _validate_positive("eval_batch_size", self.eval_batch_size)
+        _validate_positive("eval_num_workers", self.eval_num_workers)
+        _validate_positive("kid_subsets", self.kid_subsets)
+        _validate_positive("kid_subset_size", self.kid_subset_size)
+        _validate_positive("ada_interval", self.ada_interval)
+
+
+def validate_tracking_config(cfg: TrackingConfig) -> None:
+    if cfg.backend not in {"none", "wandb", "mlflow"}:
+        raise ValueError(
+            "tracking.backend must be one of: 'none', 'wandb', 'mlflow'"
+        )
+
+
+def validate_train_config(cfg: TrainConfig) -> None:
+    validate_tracking_config(cfg.tracking)
+    if cfg.best_metric not in {"fid", "kid_mean"}:
+        raise ValueError("best_metric must be one of: 'fid', 'kid_mean'")
+    if cfg.amp_dtype not in {"none", "float16", "bfloat16"}:
+        raise ValueError("amp_dtype must be one of: 'none', 'float16', 'bfloat16'")
 
 
 @dataclass

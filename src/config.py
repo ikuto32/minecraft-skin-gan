@@ -4,6 +4,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
+def _validate_positive(name: str, value: int) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0")
+
+
+def _validate_non_negative(name: str, value: int) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+
+
 class ConfigValidationError(ValueError):
     def __init__(self, title: str, details: list[dict[str, object]]) -> None:
         super().__init__(title)
@@ -56,7 +66,7 @@ class TrainConfig(SchemaModel):
     eval_seed: int = Field(default=1234, gt=0)
     eval_seeds: list[int] | None = None
     eval_batch_size: int = Field(default=64, gt=0)
-    eval_num_workers: int = Field(default=2, gt=0)
+    eval_num_workers: int = Field(default=2, ge=0)
     eval_output_dir: Path = Path("outputs/eval")
     kid_subsets: int = Field(default=50, gt=0)
     kid_subset_size: int = Field(default=32, gt=0)
@@ -71,6 +81,19 @@ class TrainConfig(SchemaModel):
 
     @model_validator(mode="after")
     def _validate_runtime_constraints(self) -> "TrainConfig":
+        _validate_positive("epochs", self.epochs)
+        _validate_positive("batch_size", self.batch_size)
+        _validate_positive("z_dim", self.z_dim)
+        _validate_positive("r1_interval", self.r1_interval)
+        _validate_positive("eval_every", self.eval_every)
+        _validate_positive("eval_sample_count", self.eval_sample_count)
+        _validate_positive("eval_seed", self.eval_seed)
+        _validate_positive("eval_batch_size", self.eval_batch_size)
+        _validate_positive("kid_subsets", self.kid_subsets)
+        _validate_positive("kid_subset_size", self.kid_subset_size)
+        _validate_positive("ada_interval", self.ada_interval)
+        _validate_non_negative("num_workers", self.num_workers)
+        _validate_non_negative("eval_num_workers", self.eval_num_workers)
         if self.num_workers == 0:
             if self.persistent_workers:
                 raise ValueError(
@@ -109,6 +132,19 @@ class EvalConfig(SchemaModel):
     resize: int = Field(default=64, gt=0)
     color_mode: Literal["RGB", "RGBA"] = "RGBA"
     reuse_real_features: bool = True
+
+
+    @model_validator(mode="after")
+    def _validate_runtime_constraints(self) -> "EvalConfig":
+        _validate_positive("sample_count", self.sample_count)
+        _validate_positive("batch_size", self.batch_size)
+        _validate_positive("z_dim", self.z_dim)
+        _validate_positive("seed", self.seed)
+        _validate_positive("kid_subsets", self.kid_subsets)
+        _validate_positive("kid_subset_size", self.kid_subset_size)
+        _validate_positive("resize", self.resize)
+        _validate_non_negative("num_workers", self.num_workers)
+        return self
 
 
 def format_validation_error(exc: ValidationError, *, root: str) -> ConfigValidationError:

@@ -14,6 +14,7 @@ from src.checkpoint import load_checkpoint, save_checkpoint
 from src.config import EvalConfig, TrainConfig
 from src.data import SkinDataset
 from src.eval import evaluate
+from src.losses.gan_losses import build_gan_loss
 from src.models import resolve_model
 from src.tracking import Tracker
 
@@ -150,6 +151,12 @@ def train(config: TrainConfig) -> None:
 
     opt_g = optim.Adam(generator.parameters(), lr=config.lr, betas=(0.5, 0.999))
     opt_d = optim.Adam(discriminator.parameters(), lr=config.lr, betas=(0.5, 0.999))
+    loss_strategy = build_gan_loss(
+        config.loss.name,
+        gp_lambda=config.loss.gp_lambda,
+        r1_gamma=config.loss.r1_gamma,
+        r1_interval=config.loss.r1_interval,
+    )
 
     fixed_noise = torch.randn(64, config.z_dim, 1, 1, device=device)
     amp_enabled = device == "cuda" and amp_dtype_name != "none"
@@ -214,9 +221,15 @@ def train(config: TrainConfig) -> None:
                 fake_for_d = _augment(fake.detach(), ada_p) if config.use_ada else fake.detach()
                 d_real = discriminator(real_for_d)
                 d_fake = discriminator(fake_for_d)
-                real_loss = torch.relu(1.0 - d_real).mean()
-                fake_loss = torch.relu(1.0 + d_fake).mean()
-                d_loss = real_loss + fake_loss
+                d_parts = loss_strategy.discriminator_loss(
+                    d_real=d_real,
+                    d_fake=d_fake,
+                    real_images=real_for_d,
+                    fake_images=fake_for_d,
+                    discriminator=discriminator,
+                    step=global_step,
+                )
+                d_loss = d_parts.loss
 
             if config.use_ada:
                 ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
@@ -228,18 +241,6 @@ def train(config: TrainConfig) -> None:
                     ada_sign_accum = 0.0
                     ada_seen = 0
 
-            r1_penalty = torch.tensor(0.0, device=device)
-            if config.r1_interval > 0 and global_step % config.r1_interval == 0:
-                real_for_r1 = real.detach().requires_grad_(True)
-                with autocast_context():
-                    d_real_r1 = discriminator(real_for_r1)
-                real_grad = torch.autograd.grad(
-                    outputs=d_real_r1.sum(),
-                    inputs=real_for_r1,
-                    create_graph=True,
-                )[0]
-                r1_penalty = real_grad.pow(2).flatten(1).sum(1).mean()
-                d_loss = d_loss + 0.5 * config.r1_gamma * r1_penalty
 
             scaler.scale(d_loss).backward()
             scaler.step(opt_d)
@@ -249,7 +250,7 @@ def train(config: TrainConfig) -> None:
                 fake_for_g = generator(noise)
                 fake_for_g_aug = _augment(fake_for_g, ada_p) if config.use_ada else fake_for_g
                 output = discriminator(fake_for_g_aug)
-                g_loss = -output.mean()
+                g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
 
             scaler.scale(g_loss).backward()
             scaler.step(opt_g)
@@ -260,13 +261,17 @@ def train(config: TrainConfig) -> None:
             d_fake_mean = float(d_fake.mean().item())
             d_loss_value = float(d_loss.item())
             g_loss_value = float(g_loss.item())
-            r1_penalty_value = float(r1_penalty.item())
+            d_adv_value = float(d_parts.adv.item())
+            gp_value = float(d_parts.gp.item())
+            r1_penalty_value = float(d_parts.r1.item())
 
             progress.set_postfix({
                 "D_loss": f"{d_loss_value:.4f}",
                 "G_loss": f"{g_loss_value:.4f}",
                 "d_real": f"{d_real_mean:.4f}",
                 "d_fake": f"{d_fake_mean:.4f}",
+                "d_adv": f"{d_adv_value:.4f}",
+                "gp": f"{gp_value:.4f}",
                 "r1_penalty": f"{r1_penalty_value:.4f}",
                 "ada_p": f"{ada_p:.3f}",
             })
@@ -276,6 +281,8 @@ def train(config: TrainConfig) -> None:
                 "train/g_loss_step": g_loss_value,
                 "train/d_real_step": d_real_mean,
                 "train/d_fake_step": d_fake_mean,
+                "train/d_adv_step": d_adv_value,
+                "train/gp_step": gp_value,
                 "train/r1_penalty_step": r1_penalty_value,
                 "train/ada_p_step": ada_p,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
@@ -293,6 +300,8 @@ def train(config: TrainConfig) -> None:
             "train/g_loss": g_loss_value,
             "train/d_real": d_real_mean,
             "train/d_fake": d_fake_mean,
+            "train/d_adv": d_adv_value,
+            "train/gp": gp_value,
             "train/r1_penalty": r1_penalty_value,
             "train/ada_p": ada_p,
             "train/epoch": epoch + 1,

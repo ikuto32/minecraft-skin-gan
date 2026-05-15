@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser = subparsers.add_parser("train", help="Train DCGAN model")
     train_parser.add_argument("--data-dir", default="data/skins")
     train_parser.add_argument("--epochs", type=int, default=100)
-    train_parser.add_argument("--batch-size", type=int, default=64)
+    train_parser.add_argument("--batch-size", type=int, default=256)
     train_parser.add_argument("--z-dim", type=int, default=100)
     train_parser.add_argument("--lr", type=float, default=2e-4)
     train_parser.add_argument("--resume", default=None)
@@ -26,9 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--compile", action="store_true")
     train_parser.add_argument("--channels-last", action="store_true")
     train_parser.add_argument("--amp-dtype", choices=["none", "bfloat16", "float16"], default="bfloat16")
-    train_parser.add_argument("--num-workers", type=int, default=2)
+    train_parser.add_argument("--num-workers", type=int, default=8)
     train_parser.add_argument("--persistent-workers", action="store_true")
-    train_parser.add_argument("--prefetch-factor", type=int, default=2)
+    train_parser.add_argument("--prefetch-factor", type=int, default=16)
     train_parser.add_argument("--eval-every", type=int, default=10)
     train_parser.add_argument("--eval-sample-count", type=int, default=2048)
     train_parser.add_argument("--eval-seed", type=int, default=1234)
@@ -59,12 +59,15 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.command == "train":
-        config = TrainConfig(**vars(args))
+    args_dict = vars(args).copy()
+    command = args_dict.pop("command", None)
+
+    if command == "train":
+        config = TrainConfig(**args_dict)
         train(config)
         return
 
-    if args.command == "eval":
+    if command == "eval":
         import torch
         from pathlib import Path
 

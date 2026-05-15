@@ -7,6 +7,7 @@ from torchvision import transforms
 
 class SkinDataset(Dataset):
     def __init__(self, image_dir: Path):
+        image_dir = Path(image_dir)
         self.paths = sorted(
             p for p in image_dir.iterdir()
             if p.suffix.lower() in {".png", ".jpg", ".jpeg"}

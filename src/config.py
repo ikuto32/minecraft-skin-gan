@@ -40,6 +40,21 @@ class TrackingConfig(SchemaModel):
     mlflow_experiment: str = "minecraft-skin-gan"
 
 
+class LossConfig(SchemaModel):
+    name: Literal["hinge", "wgan_gp", "logistic_r1"] = "hinge"
+    gp_lambda: float = 10.0
+    r1_gamma: float = 10.0
+    r1_interval: int = Field(default=16, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_loss(self) -> "LossConfig":
+        if self.name != "wgan_gp" and self.gp_lambda < 0:
+            raise ValueError("loss.gp_lambda must be >= 0")
+        if self.name == "logistic_r1" and self.r1_interval <= 0:
+            raise ValueError("loss.r1_interval must be > 0 for logistic_r1")
+        return self
+
+
 class TrainConfig(SchemaModel):
     model_name: str = "dcgan_baseline"
     data_dir: Path = Path("data/skins")
@@ -52,8 +67,6 @@ class TrainConfig(SchemaModel):
     seed: int = 42
     deterministic: bool = True
     cudnn_benchmark: bool = False
-    r1_gamma: float = 10.0
-    r1_interval: int = Field(default=16, gt=0)
     compile: bool = False
     channels_last: bool = False
     amp_dtype: Literal["none", "float16", "bfloat16"] = "bfloat16"
@@ -77,6 +90,7 @@ class TrainConfig(SchemaModel):
     ada_speed: float = 0.001
     checkpoint_dir: Path = Path("checkpoints")
     best_metric: Literal["fid", "kid_mean"] = "fid"
+    loss: LossConfig = Field(default_factory=LossConfig)
     tracking: TrackingConfig = Field(default_factory=TrackingConfig)
 
     @model_validator(mode="after")
@@ -84,7 +98,7 @@ class TrainConfig(SchemaModel):
         _validate_positive("epochs", self.epochs)
         _validate_positive("batch_size", self.batch_size)
         _validate_positive("z_dim", self.z_dim)
-        _validate_positive("r1_interval", self.r1_interval)
+        _validate_positive("loss.r1_interval", self.loss.r1_interval)
         _validate_positive("eval_every", self.eval_every)
         _validate_positive("eval_sample_count", self.eval_sample_count)
         _validate_positive("eval_seed", self.eval_seed)

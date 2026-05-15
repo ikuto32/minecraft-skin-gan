@@ -1,4 +1,4 @@
-model_name: dcgan_baseline
+model_name: dcgan_baseline  # dcgan_baseline | dcgan_improved | gan_resconv_v1
 mode: train
 data_dir: data/skins
 epochs: 100
@@ -10,8 +10,11 @@ auto_resume: true
 seed: 42
 deterministic: true
 cudnn_benchmark: true
-r1_gamma: 10.0
-r1_interval: 16
+loss:
+  name: hinge
+  gp_lambda: 10.0
+  r1_gamma: 10.0
+  r1_interval: 16
 compile: false
 channels_last: true
 amp_dtype: bfloat16

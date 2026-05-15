@@ -1,9 +1,9 @@
 [project]
 name = "minecraft-skin-gan"
 version = "0.1.0"
-description = "Add your description here"
+description = "Train and evaluate a DCGAN for 64x64 Minecraft skin generation"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "pillow>=12.2.0",
     "torch>=2.12.0",

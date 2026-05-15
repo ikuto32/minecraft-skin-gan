@@ -68,7 +68,6 @@ def main(cfg: DictConfig) -> None:
     mode_name = _mode_name(cfg)
     if mode_name == "train":
         train_cfg = _build_train_config(cfg)
-        _validate_composed_train_config(train_cfg)
         train(train_cfg)
         return
     if mode_name == "eval":

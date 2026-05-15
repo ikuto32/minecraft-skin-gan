@@ -1,5 +1,10 @@
-def main():
-    print("Hello from minecraft-skin-gan!")
+from src.config import parse_train_args
+from src.engine import train
+
+
+def main() -> None:
+    config = parse_train_args()
+    train(config)
 
 
 if __name__ == "__main__":

@@ -14,29 +14,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.kid import KernelInceptionDistance
 from torchvision import transforms
 
-
-
-class Generator(torch.nn.Module):
-    def __init__(self, z_dim=100, channels=4, features=64):
-        super().__init__()
-        self.net = torch.nn.Sequential(
-            self._block(z_dim, features * 8, 4, 1, 0),
-            self._block(features * 8, features * 4, 4, 2, 1),
-            self._block(features * 4, features * 2, 4, 2, 1),
-            self._block(features * 2, features, 4, 2, 1),
-            torch.nn.ConvTranspose2d(features, channels, 4, 2, 1),
-            torch.nn.Tanh(),
-        )
-
-    def _block(self, in_c, out_c, kernel, stride, padding):
-        return torch.nn.Sequential(
-            torch.nn.ConvTranspose2d(in_c, out_c, kernel, stride, padding, bias=False),
-            torch.nn.BatchNorm2d(out_c),
-            torch.nn.ReLU(True),
-        )
-
-    def forward(self, z):
-        return self.net(z)
+from src.models import Generator
 
 
 class RealImageDataset(Dataset):

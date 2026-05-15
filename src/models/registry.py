@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.models.dcgan import DCGANDiscriminator, DCGANGenerator, DCGANImprovedDiscriminator, DCGANImprovedGenerator
+from src.models.dcgan import (
+    DCGANDiscriminator,
+    DCGANGenerator,
+    DCGANImprovedDiscriminator,
+    DCGANImprovedGenerator,
+    ResNetDiscriminator64,
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +31,12 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         discriminator_cls=DCGANImprovedDiscriminator,
         generator_hparams={"features": 64, "channels": 4},
         discriminator_hparams={"features": 48, "channels": 4},
+    ),
+    "dcgan_resd": ModelSpec(
+        generator_cls=DCGANGenerator,
+        discriminator_cls=ResNetDiscriminator64,
+        generator_hparams={"features": 64, "channels": 4},
+        discriminator_hparams={"features": 64, "channels": 4},
     ),
 }
 

@@ -35,7 +35,7 @@ class Tracker:
                 name=cfg.run_name,
                 entity=cfg.entity,
                 config=wandb_config,
-                tags=[f"{k}:{v}" for k, v in common_tags.items()],
+                tags=self._build_wandb_tags(common_tags),
             )
             for key, value in common_tags.items():
                 wandb.run.summary[key] = value
@@ -151,6 +151,21 @@ class Tracker:
             "runtime/model_type": str(train_cfg.get("model_type", "dcgan")),
         }
         return metadata
+
+
+    @staticmethod
+    def _build_wandb_tags(common_tags: dict[str, str]) -> list[str]:
+        tags: list[str] = []
+        for key, value in common_tags.items():
+            tag = f"{key}:{value}"
+            if len(tag) <= 64:
+                tags.append(tag)
+                continue
+
+            digest = hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
+            shortened = f"{key}:sha256:{digest}"
+            tags.append(shortened if len(shortened) <= 64 else f"sha256:{digest}")
+        return tags
 
     @staticmethod
     def _count_dataset_size(data_dir: Any) -> int:

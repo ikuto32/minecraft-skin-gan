@@ -15,7 +15,7 @@ from src.config import EvalConfig
 from src.eval_io import EvalResult, append_metrics_history, save_latest_metrics
 from src.eval_metrics import compute_metrics
 from src.eval_plot import plot_metrics
-from src.models import Generator
+from src.models import resolve_model
 
 
 class RealImageDataset(Dataset):
@@ -83,7 +83,8 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
         generator=dataloader_gen,
     )
 
-    generator = Generator(z_dim=cfg.z_dim).to(device)
+    model_spec = resolve_model(cfg.model_name)
+    generator = model_spec.generator_cls(z_dim=cfg.z_dim, **model_spec.generator_hparams).to(device)
     ckpt = torch.load(cfg.checkpoint, map_location=device)
     generator.load_state_dict(ckpt["generator"])
     generator.eval()

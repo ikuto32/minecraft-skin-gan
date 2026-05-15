@@ -31,6 +31,7 @@ class TrackingConfig(SchemaModel):
 
 
 class TrainConfig(SchemaModel):
+    model_name: str = "dcgan_baseline"
     data_dir: Path = Path("data/skins")
     epochs: int = Field(default=100, gt=0)
     batch_size: int = Field(default=64, gt=0)
@@ -89,6 +90,7 @@ class TrainConfig(SchemaModel):
 
 
 class EvalConfig(SchemaModel):
+    model_name: str = "dcgan_baseline"
     checkpoint: Path = Path("checkpoints/latest.pt")
     real_dir: Path = Path("data/skins")
     output_dir: Path = Path("outputs/eval")

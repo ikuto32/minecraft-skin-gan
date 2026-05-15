@@ -1,3 +1,4 @@
+model_name: dcgan_baseline
 mode: eval
 checkpoint: checkpoints/latest.pt
 real_dir: data/skins

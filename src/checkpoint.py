@@ -1,12 +1,64 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import torch
 
+CURRENT_CHECKPOINT_SCHEMA_VERSION = 1
 
-def save_checkpoint(path: Path, epoch: int, generator, discriminator, opt_g, opt_d, *, generator_ema=None, best_metric: float | None = None):
+
+def _summarize_train_config(train_config) -> dict[str, object]:
+    if train_config is None:
+        return {}
+
+    keys = (
+        "epochs",
+        "batch_size",
+        "z_dim",
+        "lr",
+        "seed",
+        "r1_gamma",
+        "r1_interval",
+        "performance_profile",
+        "amp_dtype",
+        "ema_beta",
+        "use_ada",
+        "ada_target",
+        "ada_interval",
+        "ada_speed",
+        "best_metric",
+    )
+    return {k: getattr(train_config, k) for k in keys if hasattr(train_config, k)}
+
+
+def _get_git_commit() -> str | None:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
+def save_checkpoint(
+    path: Path,
+    epoch: int,
+    generator,
+    discriminator,
+    opt_g,
+    opt_d,
+    *,
+    generator_ema=None,
+    best_metric: float | None = None,
+    train_config=None,
+):
     payload = {
+        "schema_version": CURRENT_CHECKPOINT_SCHEMA_VERSION,
+        "model_type": {
+            "generator": generator.__class__.__name__,
+            "discriminator": discriminator.__class__.__name__,
+        },
+        "train_config": _summarize_train_config(train_config),
+        "git_commit": _get_git_commit(),
         "epoch": epoch,
         "generator": generator.state_dict(),
         "discriminator": discriminator.state_dict(),
@@ -22,10 +74,21 @@ def save_checkpoint(path: Path, epoch: int, generator, discriminator, opt_g, opt
 
 def load_checkpoint(path: Path, generator, discriminator, opt_g, opt_d, device: str, *, generator_ema=None):
     ckpt = torch.load(path, map_location=device)
+    schema_version = int(ckpt.get("schema_version", 0))
+    if schema_version != CURRENT_CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError(
+            f"Incompatible checkpoint schema_version={schema_version} (expected {CURRENT_CHECKPOINT_SCHEMA_VERSION})"
+        )
+
     generator.load_state_dict(ckpt["generator"])
     discriminator.load_state_dict(ckpt["discriminator"])
     opt_g.load_state_dict(ckpt["opt_g"])
     opt_d.load_state_dict(ckpt["opt_d"])
     if generator_ema is not None and "generator_ema" in ckpt:
         generator_ema.load_state_dict(ckpt["generator_ema"])
-    return ckpt["epoch"] + 1, float(ckpt.get("best_metric", float("inf")))
+    return {
+        "start_epoch": ckpt["epoch"] + 1,
+        "best_metric": float(ckpt.get("best_metric", float("inf"))),
+        "schema_version": schema_version,
+        "model_type": ckpt.get("model_type"),
+    }

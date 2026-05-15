@@ -12,3 +12,6 @@ kid_subsets: 50
 kid_subset_size: 32
 device: null
 epoch: null
+resize: 64
+color_mode: RGBA
+reuse_real_features: true

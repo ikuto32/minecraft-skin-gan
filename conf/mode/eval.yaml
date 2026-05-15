@@ -6,6 +6,7 @@ sample_count: 2048
 batch_size: 64
 z_dim: 100
 seed: 1234
+seeds: null
 num_workers: 2
 kid_subsets: 50
 kid_subset_size: 32

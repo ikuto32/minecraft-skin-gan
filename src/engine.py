@@ -10,7 +10,7 @@ from torchvision.utils import save_image
 from tqdm import tqdm
 
 from src.checkpoint import load_checkpoint, save_checkpoint
-from src.config import TrainConfig
+from src.config import EvalConfig, TrainConfig
 from src.data import SkinDataset
 from src.eval import evaluate
 from src.models import Discriminator, Generator
@@ -263,7 +263,7 @@ def train(config: TrainConfig) -> None:
             save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value)
 
         if config.eval_every > 0 and (epoch + 1) % config.eval_every == 0:
-            eval_result = evaluate(
+            eval_result = evaluate(EvalConfig(
                 checkpoint=config.checkpoint_dir / "latest.pt",
                 real_dir=config.data_dir,
                 output_dir=config.eval_output_dir,
@@ -271,12 +271,13 @@ def train(config: TrainConfig) -> None:
                 batch_size=config.eval_batch_size,
                 z_dim=config.z_dim,
                 seed=config.eval_seed,
+                seeds=config.eval_seeds,
                 num_workers=config.eval_num_workers,
                 kid_subsets=config.kid_subsets,
                 kid_subset_size=config.kid_subset_size,
                 device=device,
                 epoch=epoch + 1,
-            )
+            ))
             metric_value = float(getattr(eval_result, config.best_metric))
             tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, step=epoch + 1)
             if metric_value < best_metric_value:

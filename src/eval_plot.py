@@ -29,7 +29,9 @@ def plot_metrics(history_csv: Path, out_path: Path) -> None:
 
     epochs = [int(r["epoch"]) for r in rows]
     fids = [float(r["fid"]) for r in rows]
+    fid_stds = [float(r.get("fid_std", 0.0) or 0.0) for r in rows]
     kid_means = [float(r["kid_mean"]) for r in rows]
+    kid_mean_stds = [float(r.get("kid_mean_std", 0.0) or 0.0) for r in rows]
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
@@ -39,6 +41,21 @@ def plot_metrics(history_csv: Path, out_path: Path) -> None:
     else:
         axes[0].plot(epochs, fids, marker="o")
         axes[1].plot(epochs, kid_means, marker="o", color="tab:orange")
+    if any(v > 0.0 for v in fid_stds):
+        axes[0].fill_between(
+            epochs,
+            [m - s for m, s in zip(fids, fid_stds, strict=True)],
+            [m + s for m, s in zip(fids, fid_stds, strict=True)],
+            alpha=0.2,
+        )
+    if any(v > 0.0 for v in kid_mean_stds):
+        axes[1].fill_between(
+            epochs,
+            [m - s for m, s in zip(kid_means, kid_mean_stds, strict=True)],
+            [m + s for m, s in zip(kid_means, kid_mean_stds, strict=True)],
+            alpha=0.2,
+            color="tab:orange",
+        )
 
     axes[0].set_title("FID")
     axes[0].set_xlabel("Epoch")

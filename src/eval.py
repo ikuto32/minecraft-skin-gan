@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 from pathlib import Path
 
@@ -39,8 +40,6 @@ class RealImageDataset(Dataset):
 
 def evaluate(cfg: EvalConfig) -> EvalResult:
     device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    random.seed(cfg.seed)
-    torch.manual_seed(cfg.seed)
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -61,19 +60,56 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     generator.load_state_dict(ckpt["generator"])
     generator.eval()
 
-    metric_values = compute_metrics(cfg=cfg, loader=loader, generator=generator, device=device)
+    seeds = cfg.seeds or [cfg.seed]
+    metrics_by_seed: dict[int, dict[str, float]] = {}
+    fid_values: list[float] = []
+    kid_mean_values: list[float] = []
+    kid_std_values: list[float] = []
+
+    for seed in seeds:
+        random.seed(seed)
+        torch.manual_seed(seed)
+        seed_cfg = EvalConfig(**(cfg.__dict__ | {"seed": seed, "seeds": None}))
+        metric_values = compute_metrics(cfg=seed_cfg, loader=loader, generator=generator, device=device)
+        fid_values.append(metric_values.fid)
+        kid_mean_values.append(metric_values.kid_mean)
+        kid_std_values.append(metric_values.kid_std)
+        metrics_by_seed[seed] = {
+            "fid": metric_values.fid,
+            "kid_mean": metric_values.kid_mean,
+            "kid_std": metric_values.kid_std,
+        }
+
+    def _mean(values: list[float]) -> float:
+        return float(sum(values) / len(values))
+
+    def _std(values: list[float], mean: float) -> float:
+        if len(values) <= 1:
+            return 0.0
+        return float(math.sqrt(sum((v - mean) ** 2 for v in values) / len(values)))
+
+    fid_mean = _mean(fid_values)
+    kid_mean_mean = _mean(kid_mean_values)
+    kid_std_mean = _mean(kid_std_values)
 
     result = EvalResult(
         epoch=cfg.epoch if cfg.epoch is not None else int(ckpt.get("epoch", -1)) + 1,
-        fid=metric_values.fid,
-        kid_mean=metric_values.kid_mean,
-        kid_std=metric_values.kid_std,
+        fid=fid_mean,
+        fid_std=_std(fid_values, fid_mean),
+        fid_best=min(fid_values),
+        fid_worst=max(fid_values),
+        kid_mean=kid_mean_mean,
+        kid_std=kid_std_mean,
+        kid_mean_std=_std(kid_mean_values, kid_mean_mean),
+        kid_mean_best=min(kid_mean_values),
+        kid_mean_worst=max(kid_mean_values),
         sample_count=cfg.sample_count,
-        seed=cfg.seed,
+        seed=seeds[0],
+        seeds=seeds,
     )
 
     save_latest_metrics(result, cfg.output_dir)
     history_path = append_metrics_history(result, cfg.output_dir)
     plot_metrics(history_path, cfg.output_dir / "metrics.png")
-    print(json.dumps(result.__dict__, indent=2))
+    print(json.dumps({"summary": result.__dict__, "by_seed": metrics_by_seed}, indent=2))
     return result

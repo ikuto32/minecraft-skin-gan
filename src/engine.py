@@ -1,5 +1,6 @@
 from pathlib import Path
 import contextlib
+import copy
 import random
 
 import torch
@@ -13,6 +14,32 @@ from src.config import TrainConfig
 from src.data import SkinDataset
 from src.eval import evaluate
 from src.models import Discriminator, Generator
+
+
+def _update_ema(ema_model: Generator, model: Generator, beta: float) -> None:
+    with torch.no_grad():
+        for ema_param, param in zip(ema_model.parameters(), model.parameters(), strict=True):
+            ema_param.lerp_(param.detach(), 1.0 - beta)
+        for ema_buffer, buffer in zip(ema_model.buffers(), model.buffers(), strict=True):
+            ema_buffer.copy_(buffer)
+
+
+def _augment(images: torch.Tensor, p: float) -> torch.Tensor:
+    if p <= 0.0:
+        return images
+
+    batch = images.shape[0]
+    device = images.device
+
+    flip_mask = (torch.rand(batch, 1, 1, 1, device=device) < (p * 0.5)).to(images.dtype)
+    flipped = torch.flip(images, dims=[3])
+    images = flip_mask * flipped + (1.0 - flip_mask) * images
+
+    if p > 0.25:
+        noise_std = 0.05 * min(1.0, p)
+        images = images + torch.randn_like(images) * noise_std
+
+    return images.clamp_(-1.0, 1.0)
 
 
 def train(config: TrainConfig) -> None:
@@ -41,6 +68,11 @@ def train(config: TrainConfig) -> None:
     memory_format = torch.channels_last if config.channels_last else torch.contiguous_format
 
     generator = Generator(z_dim=config.z_dim).to(device, memory_format=memory_format)
+    generator_ema = copy.deepcopy(generator).to(device, memory_format=memory_format)
+    generator_ema.eval()
+    for p in generator_ema.parameters():
+        p.requires_grad_(False)
+
     discriminator = Discriminator().to(device, memory_format=memory_format)
 
     opt_g = optim.Adam(generator.parameters(), lr=config.lr, betas=(0.5, 0.999))
@@ -51,6 +83,9 @@ def train(config: TrainConfig) -> None:
     amp_dtype = torch.bfloat16 if config.amp_dtype == "bfloat16" else torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda" and config.amp_dtype == "float16")
     global_step = 0
+    ada_p = 0.0
+    ada_sign_accum = 0.0
+    ada_seen = 0
 
     start_epoch = 0
     if config.resume:
@@ -62,6 +97,7 @@ def train(config: TrainConfig) -> None:
             opt_d,
             device,
         )
+        _update_ema(generator_ema, generator, beta=0.0)
         print(f"Resumed from epoch {start_epoch}")
 
     if config.compile:
@@ -87,11 +123,23 @@ def train(config: TrainConfig) -> None:
             discriminator.zero_grad(set_to_none=True)
             with autocast_context():
                 fake = generator(noise)
-                d_real = discriminator(real)
-                d_fake = discriminator(fake.detach())
+                real_for_d = _augment(real, ada_p) if config.use_ada else real
+                fake_for_d = _augment(fake.detach(), ada_p) if config.use_ada else fake.detach()
+                d_real = discriminator(real_for_d)
+                d_fake = discriminator(fake_for_d)
                 real_loss = torch.relu(1.0 - d_real).mean()
                 fake_loss = torch.relu(1.0 + d_fake).mean()
                 d_loss = real_loss + fake_loss
+
+            if config.use_ada:
+                ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
+                ada_seen += d_real.numel()
+                if global_step > 0 and global_step % config.ada_interval == 0 and ada_seen > 0:
+                    ada_sign = ada_sign_accum / ada_seen
+                    adjust = (ada_sign - config.ada_target) * config.ada_speed
+                    ada_p = float(min(1.0, max(0.0, ada_p + adjust)))
+                    ada_sign_accum = 0.0
+                    ada_seen = 0
 
             r1_penalty = torch.tensor(0.0, device=device)
             if config.r1_interval > 0 and global_step % config.r1_interval == 0:
@@ -112,12 +160,14 @@ def train(config: TrainConfig) -> None:
             generator.zero_grad(set_to_none=True)
             with autocast_context():
                 fake_for_g = generator(noise)
-                output = discriminator(fake_for_g)
+                fake_for_g_aug = _augment(fake_for_g, ada_p) if config.use_ada else fake_for_g
+                output = discriminator(fake_for_g_aug)
                 g_loss = -output.mean()
 
             scaler.scale(g_loss).backward()
             scaler.step(opt_g)
             scaler.update()
+            _update_ema(generator_ema, generator, config.ema_beta)
 
             progress.set_postfix({
                 "D_loss": f"{d_loss.item():.4f}",
@@ -125,11 +175,12 @@ def train(config: TrainConfig) -> None:
                 "d_real": f"{d_real.mean().item():.4f}",
                 "d_fake": f"{d_fake.mean().item():.4f}",
                 "r1_penalty": f"{r1_penalty.item():.4f}",
+                "ada_p": f"{ada_p:.3f}",
             })
             global_step += 1
 
         with torch.no_grad():
-            samples = generator(fixed_noise).detach().cpu()
+            samples = generator_ema(fixed_noise).detach().cpu()
             samples = (samples + 1) / 2
             save_image(samples, f"outputs/epoch_{epoch + 1:04d}.png", nrow=8)
 

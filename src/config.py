@@ -28,6 +28,11 @@ class TrainConfig:
     eval_output_dir: Path = Path("outputs/eval")
     kid_subsets: int = 50
     kid_subset_size: int = 32
+    ema_beta: float = 0.999
+    use_ada: bool = False
+    ada_target: float = 0.6
+    ada_interval: int = 4
+    ada_speed: float = 0.001
 
 
 def parse_train_args() -> TrainConfig:
@@ -55,4 +60,9 @@ def parse_train_args() -> TrainConfig:
     parser.add_argument("--eval-output-dir", type=Path, default=Path("outputs/eval"))
     parser.add_argument("--kid-subsets", type=int, default=50)
     parser.add_argument("--kid-subset-size", type=int, default=32)
+    parser.add_argument("--ema-beta", type=float, default=0.999)
+    parser.add_argument("--use-ada", action="store_true")
+    parser.add_argument("--ada-target", type=float, default=0.6)
+    parser.add_argument("--ada-interval", type=int, default=4)
+    parser.add_argument("--ada-speed", type=float, default=0.001)
     return TrainConfig(**vars(parser.parse_args()))

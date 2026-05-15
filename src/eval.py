@@ -4,6 +4,7 @@ import json
 import math
 import random
 import hashlib
+import warnings
 from pathlib import Path
 
 import torch
@@ -83,9 +84,23 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
         generator=dataloader_gen,
     )
 
-    model_spec = resolve_model(cfg.model_name)
-    generator = model_spec.generator_cls(z_dim=cfg.z_dim, **model_spec.generator_hparams).to(device)
     ckpt = torch.load(cfg.checkpoint, map_location=device)
+    train_cfg = ckpt.get("train_config", {}) if isinstance(ckpt, dict) else {}
+    train_color_mode = train_cfg.get("color_mode")
+    if isinstance(train_color_mode, str) and train_color_mode != cfg.color_mode:
+        warnings.warn(
+            "Eval color_mode does not match train config: "
+            f"eval={cfg.color_mode}, train={train_color_mode}.",
+            stacklevel=2,
+        )
+
+    channels = 3 if cfg.color_mode == "RGB" else 4
+    model_spec = resolve_model(cfg.model_name)
+    generator = model_spec.generator_cls(
+        z_dim=cfg.z_dim,
+        channels=channels,
+        **model_spec.generator_hparams,
+    ).to(device)
     generator.load_state_dict(ckpt["generator"])
     generator.eval()
 

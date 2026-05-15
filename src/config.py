@@ -36,6 +36,8 @@ class TrainConfig(SchemaModel):
     epochs: int = Field(default=100, gt=0)
     batch_size: int = Field(default=64, gt=0)
     z_dim: int = Field(default=100, gt=0)
+    color_mode: Literal["RGB", "RGBA"] = "RGBA"
+    channels: int | None = Field(default=None, gt=0)
     lr: float = 2e-4
     resume: Path | None = None
     auto_resume: bool = True
@@ -71,6 +73,14 @@ class TrainConfig(SchemaModel):
 
     @model_validator(mode="after")
     def _validate_runtime_constraints(self) -> "TrainConfig":
+        mode_channels = 3 if self.color_mode == "RGB" else 4
+        if self.channels is None:
+            self.channels = mode_channels
+        elif self.channels != mode_channels:
+            raise ValueError(
+                f"channels ({self.channels}) must match color_mode={self.color_mode} ({mode_channels})"
+            )
+
         if self.num_workers == 0:
             if self.persistent_workers:
                 raise ValueError(
@@ -109,6 +119,12 @@ class EvalConfig(SchemaModel):
     resize: int = Field(default=64, gt=0)
     color_mode: Literal["RGB", "RGBA"] = "RGBA"
     reuse_real_features: bool = True
+
+    @model_validator(mode="after")
+    def _validate_color_channels(self) -> "EvalConfig":
+        if self.color_mode not in {"RGB", "RGBA"}:
+            raise ValueError(f"Unsupported color_mode={self.color_mode!r}")
+        return self
 
 
 def format_validation_error(exc: ValidationError, *, root: str) -> ConfigValidationError:

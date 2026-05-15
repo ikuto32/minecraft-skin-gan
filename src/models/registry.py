@@ -17,14 +17,14 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     "dcgan_baseline": ModelSpec(
         generator_cls=DCGANGenerator,
         discriminator_cls=DCGANDiscriminator,
-        generator_hparams={"features": 64, "channels": 4},
-        discriminator_hparams={"features": 64, "channels": 4},
+        generator_hparams={"features": 64},
+        discriminator_hparams={"features": 64},
     ),
     "dcgan_improved": ModelSpec(
         generator_cls=DCGANImprovedGenerator,
         discriminator_cls=DCGANImprovedDiscriminator,
-        generator_hparams={"features": 64, "channels": 4},
-        discriminator_hparams={"features": 48, "channels": 4},
+        generator_hparams={"features": 64},
+        discriminator_hparams={"features": 48},
     ),
 }
 

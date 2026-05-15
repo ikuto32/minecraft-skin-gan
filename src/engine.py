@@ -116,7 +116,7 @@ def train(config: TrainConfig) -> None:
         "runtime/amp_dtype_is_float16": int(amp_dtype_name == "float16"),
     })
 
-    dataset = SkinDataset(config.data_dir)
+    dataset = SkinDataset(config.data_dir, color_mode=config.color_mode, channels=config.channels)
     dataloader_kwargs = dict(
         batch_size=config.batch_size,
         shuffle=True,
@@ -136,13 +136,20 @@ def train(config: TrainConfig) -> None:
     memory_format = torch.channels_last if channels_last_enabled else torch.contiguous_format
 
     model_spec = resolve_model(config.model_name)
-    generator = model_spec.generator_cls(z_dim=config.z_dim, **model_spec.generator_hparams).to(device, memory_format=memory_format)
+    generator = model_spec.generator_cls(
+        z_dim=config.z_dim,
+        channels=config.channels,
+        **model_spec.generator_hparams,
+    ).to(device, memory_format=memory_format)
     generator_ema = copy.deepcopy(generator).to(device, memory_format=memory_format)
     generator_ema.eval()
     for p in generator_ema.parameters():
         p.requires_grad_(False)
 
-    discriminator = model_spec.discriminator_cls(**model_spec.discriminator_hparams).to(device, memory_format=memory_format)
+    discriminator = model_spec.discriminator_cls(
+        channels=config.channels,
+        **model_spec.discriminator_hparams,
+    ).to(device, memory_format=memory_format)
 
     opt_g = optim.Adam(generator.parameters(), lr=config.lr, betas=(0.5, 0.999))
     opt_d = optim.Adam(discriminator.parameters(), lr=config.lr, betas=(0.5, 0.999))
@@ -318,6 +325,7 @@ def train(config: TrainConfig) -> None:
                 kid_subset_size=config.kid_subset_size,
                 device=device,
                 epoch=epoch + 1,
+                color_mode=config.color_mode,
             ))
             metric_value = float(getattr(eval_result, config.best_metric))
             tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, epoch=epoch + 1)

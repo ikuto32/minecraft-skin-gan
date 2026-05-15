@@ -96,7 +96,24 @@ def train(config: TrainConfig) -> None:
 
     Path("outputs").mkdir(exist_ok=True)
     config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    tracker = Tracker(config.tracking, {"train": config.__dict__ | {"tracking": config.tracking.__dict__}})
+    runtime_profile = {
+        "compile": compile_enabled,
+        "amp_dtype": amp_dtype_name,
+        "channels_last": channels_last_enabled,
+        "performance_profile": config.performance_profile,
+    }
+    tracker = Tracker(
+        config.tracking,
+        {"train": config.__dict__ | {"tracking": config.tracking.__dict__}},
+        runtime_profile=runtime_profile,
+    )
+
+    tracker.log_summary({
+        "runtime/compile": int(compile_enabled),
+        "runtime/channels_last": int(channels_last_enabled),
+        "runtime/amp_dtype_is_bfloat16": int(amp_dtype_name == "bfloat16"),
+        "runtime/amp_dtype_is_float16": int(amp_dtype_name == "float16"),
+    })
 
     dataset = SkinDataset(config.data_dir)
     dataloader_kwargs = dict(

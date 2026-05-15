@@ -38,7 +38,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         discriminator_cls=ResNetDiscriminator64,
         generator_hparams={"features": 64, "channels": 4},
         discriminator_hparams={"features": 64, "channels": 4},
-
+    ),
     "gan_resconv_v1": ModelSpec(
         generator_cls=ResConvGenerator,
         discriminator_cls=DCGANImprovedDiscriminator,

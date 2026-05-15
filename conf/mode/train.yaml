@@ -7,6 +7,8 @@ lr: 0.0002
 resume: null
 auto_resume: true
 seed: 42
+deterministic: true
+cudnn_benchmark: false
 r1_gamma: 10.0
 r1_interval: 16
 compile: false

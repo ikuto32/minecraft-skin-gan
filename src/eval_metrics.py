@@ -36,7 +36,9 @@ def compute_metrics(
     loader: DataLoader,
     generator: Generator,
     device: str,
-) -> EvalMetricsResult:
+    real_features_state: dict[str, object] | None,
+    cache_real_only: bool,
+) -> EvalMetricsResult | dict[str, object]:
     fid = FrechetInceptionDistance(feature=2048, normalize=False).to(device)
     kid = KernelInceptionDistance(
         subset_size=cfg.kid_subset_size,
@@ -45,23 +47,37 @@ def compute_metrics(
         normalize=False,
     ).to(device)
 
+    if real_features_state is not None:
+        fid.load_state_dict(real_features_state["fid_state"])
+        kid.load_state_dict(real_features_state["kid_state"])
+    else:
+        seen = 0
+        for real in loader:
+            if seen >= cfg.sample_count:
+                break
+            real = real.to(device)
+            take = min(cfg.sample_count - seen, real.size(0))
+            real = real[:take]
+            real_u8 = to_uint8_rgb(real)
+            fid.update(real_u8, real=True)
+            kid.update(real_u8, real=True)
+            seen += take
+
+    if cache_real_only:
+        return {
+            "fid_state": fid.state_dict(),
+            "kid_state": kid.state_dict(),
+        }
+
     seen = 0
     for real in loader:
         if seen >= cfg.sample_count:
             break
-        real = real.to(device)
         take = min(cfg.sample_count - seen, real.size(0))
-        real = real[:take]
-
         noise = torch.randn(take, cfg.z_dim, 1, 1, device=device)
         fake = generate_fake_batch(generator, noise)
-
-        real_u8 = to_uint8_rgb(real)
         fake_u8 = to_uint8_rgb(fake)
-
-        fid.update(real_u8, real=True)
         fid.update(fake_u8, real=False)
-        kid.update(real_u8, real=True)
         kid.update(fake_u8, real=False)
         seen += take
 

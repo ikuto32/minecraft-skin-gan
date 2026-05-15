@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import hashlib
 from pathlib import Path
 
 import torch
@@ -18,7 +19,7 @@ from src.models import Generator
 
 
 class RealImageDataset(Dataset):
-    def __init__(self, image_dir: Path):
+    def __init__(self, image_dir: Path, *, resize: int, color_mode: str):
         self.paths = sorted(
             p for p in image_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}
         )
@@ -26,24 +27,36 @@ class RealImageDataset(Dataset):
             raise ValueError(f"No images found in {image_dir}")
 
         self.transform = transforms.Compose([
-            transforms.Resize((64, 64)),
+            transforms.Resize((resize, resize)),
             transforms.ToTensor(),
         ])
+        self.color_mode = color_mode
 
     def __len__(self) -> int:
         return len(self.paths)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
-        image = Image.open(self.paths[idx]).convert("RGBA")
+        image = Image.open(self.paths[idx]).convert(self.color_mode)
         return self.transform(image)
 
 
+def _real_features_cache_path(cfg: EvalConfig) -> Path:
+    cache_key = {
+        "real_dir": str(cfg.real_dir.resolve()),
+        "image_count": cfg.sample_count,
+        "resize": cfg.resize,
+        "color_mode": cfg.color_mode,
+    }
+    digest = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return cfg.output_dir / "cache" / f"real_features_{digest}.pt"
+
+  
 def _seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     random.seed(worker_seed)
     torch.manual_seed(worker_seed)
 
-
+    
 def evaluate(cfg: EvalConfig) -> EvalResult:
     device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")
     random.seed(cfg.seed)
@@ -54,7 +67,7 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = RealImageDataset(cfg.real_dir)
+    dataset = RealImageDataset(cfg.real_dir, resize=cfg.resize, color_mode=cfg.color_mode)
     if cfg.sample_count > len(dataset):
         raise ValueError(f"sample_count ({cfg.sample_count}) must be <= number of real images ({len(dataset)})")
 
@@ -76,6 +89,44 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     generator.eval()
 
     seeds = cfg.seeds or [cfg.seed]
+
+    real_features_cache_path = _real_features_cache_path(cfg)
+    real_metrics_state = None
+    if cfg.reuse_real_features and real_features_cache_path.exists():
+        cached = torch.load(real_features_cache_path, map_location="cpu")
+        expected_meta = {
+            "real_dir": str(cfg.real_dir.resolve()),
+            "image_count": cfg.sample_count,
+            "resize": cfg.resize,
+            "color_mode": cfg.color_mode,
+        }
+        if cached.get("meta") == expected_meta:
+            real_metrics_state = cached
+
+    if real_metrics_state is None:
+        real_features_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        real_metrics_state = compute_metrics(
+            cfg=cfg,
+            loader=loader,
+            generator=generator,
+            device=device,
+            real_features_state=None,
+            cache_real_only=True,
+        )
+        if cfg.reuse_real_features:
+            torch.save(
+                {
+                    "meta": {
+                        "real_dir": str(cfg.real_dir.resolve()),
+                        "image_count": cfg.sample_count,
+                        "resize": cfg.resize,
+                        "color_mode": cfg.color_mode,
+                    },
+                    "fid_state": real_metrics_state["fid_state"],
+                    "kid_state": real_metrics_state["kid_state"],
+                },
+                real_features_cache_path,
+            )
     metrics_by_seed: dict[int, dict[str, float]] = {}
     fid_values: list[float] = []
     kid_mean_values: list[float] = []
@@ -85,7 +136,14 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
         random.seed(seed)
         torch.manual_seed(seed)
         seed_cfg = EvalConfig(**(cfg.__dict__ | {"seed": seed, "seeds": None}))
-        metric_values = compute_metrics(cfg=seed_cfg, loader=loader, generator=generator, device=device)
+        metric_values = compute_metrics(
+            cfg=seed_cfg,
+            loader=loader,
+            generator=generator,
+            device=device,
+            real_features_state=real_metrics_state,
+            cache_real_only=False,
+        )
         fid_values.append(metric_values.fid)
         kid_mean_values.append(metric_values.kid_mean)
         kid_std_values.append(metric_values.kid_std)

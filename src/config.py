@@ -117,6 +117,9 @@ class EvalConfig:
     kid_subset_size: int = 32
     device: str | None = None
     epoch: int | None = None
+    resize: int = 64
+    color_mode: Literal["RGB", "RGBA"] = "RGBA"
+    reuse_real_features: bool = True
 
     def __post_init__(self) -> None:
         self.checkpoint = _ensure_path(self.checkpoint)  # type: ignore[assignment]
@@ -130,6 +133,7 @@ class EvalConfig:
         _validate_positive("kid_subsets", self.kid_subsets)
         _validate_positive("kid_subset_size", self.kid_subset_size)
         _validate_positive("seed", self.seed)
+        _validate_positive("resize", self.resize)
         if self.seeds is not None:
             if not self.seeds:
                 raise ValueError("seeds must not be empty")
@@ -138,3 +142,5 @@ class EvalConfig:
 
         if self.device not in {None, "cpu", "cuda"}:
             raise ValueError("device must be one of: null, 'cpu', 'cuda'")
+        if self.color_mode not in {"RGB", "RGBA"}:
+            raise ValueError("color_mode must be one of: 'RGB', 'RGBA'")

@@ -46,6 +46,7 @@ class TrainConfig:
     eval_every: int = 10
     eval_sample_count: int = 2048
     eval_seed: int = 1234
+    eval_seeds: list[int] | None = None
     eval_batch_size: int = 64
     eval_num_workers: int = 2
     eval_output_dir: Path = Path("outputs/eval")
@@ -106,6 +107,7 @@ class EvalConfig:
     batch_size: int = 64
     z_dim: int = 100
     seed: int = 1234
+    seeds: list[int] | None = None
     num_workers: int = 2
     kid_subsets: int = 50
     kid_subset_size: int = 32
@@ -123,6 +125,12 @@ class EvalConfig:
         _validate_positive("num_workers", self.num_workers)
         _validate_positive("kid_subsets", self.kid_subsets)
         _validate_positive("kid_subset_size", self.kid_subset_size)
+        _validate_positive("seed", self.seed)
+        if self.seeds is not None:
+            if not self.seeds:
+                raise ValueError("seeds must not be empty")
+            for seed in self.seeds:
+                _validate_positive("seeds[*]", seed)
 
         if self.device not in {None, "cpu", "cuda"}:
             raise ValueError("device must be one of: null, 'cpu', 'cuda'")

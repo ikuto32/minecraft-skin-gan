@@ -14,12 +14,24 @@ from src.engine import train
 from src.eval import evaluate
 
 
+def _parse_seed_list(value: object) -> list[int] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items = [x.strip() for x in value.split(",") if x.strip()]
+        return [int(x) for x in items]
+    if isinstance(value, list):
+        return [int(x) for x in value]
+    raise ValueError(f"Unsupported seed list type: {type(value)!r}")
+
+
 def _build_train_config(cfg: DictConfig) -> TrainConfig:
     data = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(data, dict)
     tracking = TrackingConfig(**data["tracking"])
     data.pop("mode", None)
     data.pop("tracking", None)
+    data["eval_seeds"] = _parse_seed_list(data.get("eval_seeds"))
     return TrainConfig(**data, tracking=tracking)
 
 
@@ -35,6 +47,7 @@ def _build_eval_config(cfg: DictConfig) -> EvalConfig:
     data = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(data, dict)
     data.pop("mode", None)
+    data["seeds"] = _parse_seed_list(data.get("seeds"))
     return EvalConfig(**data)
 
 

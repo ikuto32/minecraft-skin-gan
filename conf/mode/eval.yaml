@@ -6,6 +6,8 @@ sample_count: 2048
 batch_size: 64
 z_dim: 100
 seed: 1234
+deterministic: true
+cudnn_benchmark: false
 seeds: null
 num_workers: 2
 kid_subsets: 50

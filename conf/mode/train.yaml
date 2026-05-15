@@ -1,4 +1,4 @@
-model_name: dcgan_baseline
+model_name: dcgan_baseline  # dcgan_baseline | dcgan_improved | gan_resconv_v1
 mode: train
 data_dir: data/skins
 epochs: 100

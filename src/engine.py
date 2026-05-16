@@ -2,6 +2,7 @@ from pathlib import Path
 import contextlib
 import copy
 import random
+import warnings
 
 import torch
 import torch.nn as nn
@@ -17,7 +18,29 @@ from src.data import SkinDataset
 from src.eval import evaluate
 from src.losses.gan_losses import build_gan_loss
 from src.models import resolve_model
-from src.tracking import Tracker
+from src.tracking import Tracker, build_gan_diagnostics_payload
+
+
+def _grad_l2_norm(module: nn.Module) -> float:
+    total = 0.0
+    for p in module.parameters():
+        if p.grad is None:
+            continue
+        g = p.grad.detach().float()
+        total += float(torch.sum(g * g).item())
+    return total**0.5
+
+
+def _param_delta_l2_norm(before: list[torch.Tensor], module: nn.Module) -> float:
+    total = 0.0
+    for prev, curr in zip(before, module.parameters(), strict=True):
+        delta = curr.detach().float() - prev
+        total += float(torch.sum(delta * delta).item())
+    return total**0.5
+
+
+def _snapshot_params(module: nn.Module) -> list[torch.Tensor]:
+    return [p.detach().float().clone() for p in module.parameters()]
 
 
 def _seed_worker(worker_id: int) -> None:
@@ -261,6 +284,11 @@ def train(config: TrainConfig) -> None:
             gp_sum = 0.0
             r1_penalty_sum = 0.0
             r2_penalty_sum = 0.0
+            d_real_sq_sum = 0.0
+            d_fake_sq_sum = 0.0
+            d_grad_norm_sum = 0.0
+
+            d_param_before = _snapshot_params(discriminator)
 
             for _ in range(config.n_critic):
                 noise_d = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
@@ -308,6 +336,7 @@ def train(config: TrainConfig) -> None:
                         ada_seen = 0
 
                 scaler.scale(d_loss).backward()
+                d_grad_norm_sum += _grad_l2_norm(discriminator)
                 scaler.step(opt_d)
                 global_step += 1
 
@@ -318,6 +347,8 @@ def train(config: TrainConfig) -> None:
                 gp_sum += float(d_parts.gp.item())
                 r1_penalty_sum += float(d_parts.r1.item())
                 r2_penalty_sum += float(d_parts.r2.item())
+                d_real_sq_sum += float(d_real.float().pow(2).mean().item())
+                d_fake_sq_sum += float(d_fake.float().pow(2).mean().item())
 
             d_loss_value = d_loss_sum / config.n_critic
             d_real_mean = d_real_sum / config.n_critic
@@ -327,9 +358,14 @@ def train(config: TrainConfig) -> None:
             r1_penalty_value = r1_penalty_sum / config.n_critic
             r2_penalty_value = r2_penalty_sum / config.n_critic
             d_reg_value = d_loss_value - d_adv_value
+            d_real_var = max(0.0, (d_real_sq_sum / config.n_critic) - (d_real_mean**2))
+            d_fake_var = max(0.0, (d_fake_sq_sum / config.n_critic) - (d_fake_mean**2))
+            d_grad_norm = d_grad_norm_sum / config.n_critic
+            d_update_norm = _param_delta_l2_norm(d_param_before, discriminator)
 
             noise_g = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
             generator.zero_grad(set_to_none=True)
+            g_param_before = _snapshot_params(generator)
             with autocast_context():
                 fake_for_g = generator(noise_g)
                 fake_for_g_aug = _diffaugment(fake_for_g, ada_p, config.ada_policy) if config.use_ada else fake_for_g
@@ -337,9 +373,12 @@ def train(config: TrainConfig) -> None:
                 g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
 
             scaler.scale(g_loss).backward()
+            g_grad_norm = _grad_l2_norm(generator)
             scaler.step(opt_g)
             scaler.update()
             _update_ema(generator_ema, generator, config.ema_beta)
+            g_update_norm = _param_delta_l2_norm(g_param_before, generator)
+            update_ratio = g_update_norm / max(d_update_norm, 1e-12)
 
             g_loss_value = float(g_loss.item())
 
@@ -372,7 +411,36 @@ def train(config: TrainConfig) -> None:
                 "train/ada_grad_step": float(ada_grad_accum / max(1, (global_step % config.ada_interval) + 1)) if config.use_ada else 0.0,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
                 "train/lr_d": float(opt_d.param_groups[0]["lr"]),
-            }, step=global_step)
+            } | build_gan_diagnostics_payload(
+                d_real_mean=d_real_mean,
+                d_real_var=d_real_var,
+                d_fake_mean=d_fake_mean,
+                d_fake_var=d_fake_var,
+                grad_norm_g=g_grad_norm,
+                grad_norm_d=d_grad_norm,
+                update_norm_g=g_update_norm,
+                update_norm_d=d_update_norm,
+                update_ratio_g_over_d=update_ratio,
+            ), step=global_step)
+
+            if not torch.isfinite(torch.tensor([d_loss_value, g_loss_value, d_real_mean, d_fake_mean, g_grad_norm, d_grad_norm], dtype=torch.float32)).all():
+                warnings.warn(
+                    f"[train-guard] non-finite detected at step={global_step}: "
+                    f"D_loss={d_loss_value}, G_loss={g_loss_value}, d_real={d_real_mean}, d_fake={d_fake_mean}",
+                    stacklevel=2,
+                )
+            if max(g_grad_norm, d_grad_norm) > 1e3:
+                warnings.warn(
+                    f"[train-guard] gradient explosion suspected at step={global_step}: "
+                    f"grad_norm_g={g_grad_norm:.3e}, grad_norm_d={d_grad_norm:.3e}",
+                    stacklevel=2,
+                )
+            if d_real_mean > 0.95 and d_fake_mean < 0.05:
+                warnings.warn(
+                    f"[train-guard] discriminator saturation suspected at step={global_step}: "
+                    f"d_real_mean={d_real_mean:.4f}, d_fake_mean={d_fake_mean:.4f}",
+                    stacklevel=2,
+                )
 
         with torch.no_grad():
             samples = generator_ema(fixed_noise).detach().cpu()

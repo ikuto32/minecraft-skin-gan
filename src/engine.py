@@ -199,6 +199,8 @@ def train(config: TrainConfig) -> None:
     amp_enabled = device == "cuda" and amp_dtype_name != "none"
     amp_dtype = torch.bfloat16 if amp_dtype_name == "bfloat16" else torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda" and amp_dtype_name == "float16")
+    # global_step is defined as the number of discriminator updates.
+    # This keeps step-based regularization intervals (R1/R2, ADA) aligned with D updates.
     global_step = 0
     ada_p = 0.0
     ada_sign_accum = 0.0
@@ -245,63 +247,88 @@ def train(config: TrainConfig) -> None:
                 real = real.contiguous(memory_format=torch.channels_last)
             batch_size = real.size(0)
 
-            noise = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
-
             def autocast_context():
                 if amp_enabled:
                     return torch.autocast(device_type="cuda", dtype=amp_dtype)
                 return contextlib.nullcontext()
 
-            discriminator.zero_grad(set_to_none=True)
-            with autocast_context():
-                fake = generator(noise)
-                real_for_d = _diffaugment(real, ada_p, config.ada_policy) if config.use_ada else real
+            d_loss_sum = 0.0
+            d_real_sum = 0.0
+            d_fake_sum = 0.0
+            d_adv_sum = 0.0
+            gp_sum = 0.0
+            r1_penalty_sum = 0.0
+            r2_penalty_sum = 0.0
+
+            for _ in range(config.n_critic):
+                noise_d = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
+                discriminator.zero_grad(set_to_none=True)
+                with autocast_context():
+                    fake = generator(noise_d)
+                    real_for_d = _diffaugment(real, ada_p, config.ada_policy) if config.use_ada else real
+                    if config.use_ada:
+                        real_for_d = real_for_d.detach().requires_grad_(True)
+                    fake_for_d = _diffaugment(fake.detach(), ada_p, config.ada_policy) if config.use_ada else fake.detach()
+                    d_real = discriminator(real_for_d)
+                    d_fake = discriminator(fake_for_d)
+                    d_parts = loss_strategy.discriminator_loss(
+                        d_real=d_real,
+                        d_fake=d_fake,
+                        real_images=real_for_d,
+                        fake_images=fake_for_d,
+                        discriminator=discriminator,
+                        step=global_step,
+                    )
+                    d_loss = d_parts.loss
+
                 if config.use_ada:
-                    real_for_d = real_for_d.detach().requires_grad_(True)
-                fake_for_d = _diffaugment(fake.detach(), ada_p, config.ada_policy) if config.use_ada else fake.detach()
-                d_real = discriminator(real_for_d)
-                d_fake = discriminator(fake_for_d)
-                d_parts = loss_strategy.discriminator_loss(
-                    d_real=d_real,
-                    d_fake=d_fake,
-                    real_images=real_for_d,
-                    fake_images=fake_for_d,
-                    discriminator=discriminator,
-                    step=global_step,
-                )
-                d_loss = d_parts.loss
+                    ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
+                    ada_seen += d_real.numel()
+                    real_grad = torch.autograd.grad(
+                        outputs=d_real.sum(),
+                        inputs=real_for_d,
+                        create_graph=False,
+                        retain_graph=True,
+                        only_inputs=True,
+                        allow_unused=False,
+                    )[0]
+                    ada_grad_accum += real_grad.detach().float().pow(2).mean().sqrt().item()
+                    if global_step > 0 and global_step % config.ada_interval == 0 and ada_seen > 0:
+                        ada_sign = ada_sign_accum / ada_seen
+                        ada_grad = ada_grad_accum / config.ada_interval
+                        sign_term = (ada_sign - config.ada_target)
+                        grad_term = (ada_grad - config.ada_grad_target) / max(config.ada_grad_target, 1e-8)
+                        wsum = config.ada_sign_weight + config.ada_grad_weight
+                        combined = (config.ada_sign_weight * sign_term + config.ada_grad_weight * grad_term) / wsum
+                        ada_p = float(min(1.0, max(0.0, ada_p + (combined * config.ada_speed))))
+                        ada_sign_accum = 0.0
+                        ada_grad_accum = 0.0
+                        ada_seen = 0
 
-            if config.use_ada:
-                ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
-                ada_seen += d_real.numel()
-                real_grad = torch.autograd.grad(
-                    outputs=d_real.sum(),
-                    inputs=real_for_d,
-                    create_graph=False,
-                    retain_graph=True,
-                    only_inputs=True,
-                    allow_unused=False,
-                )[0]
-                ada_grad_accum += real_grad.detach().float().pow(2).mean().sqrt().item()
-                if global_step > 0 and global_step % config.ada_interval == 0 and ada_seen > 0:
-                    ada_sign = ada_sign_accum / ada_seen
-                    ada_grad = ada_grad_accum / config.ada_interval
-                    sign_term = (ada_sign - config.ada_target)
-                    grad_term = (ada_grad - config.ada_grad_target) / max(config.ada_grad_target, 1e-8)
-                    wsum = config.ada_sign_weight + config.ada_grad_weight
-                    combined = (config.ada_sign_weight * sign_term + config.ada_grad_weight * grad_term) / wsum
-                    ada_p = float(min(1.0, max(0.0, ada_p + (combined * config.ada_speed))))
-                    ada_sign_accum = 0.0
-                    ada_grad_accum = 0.0
-                    ada_seen = 0
+                scaler.scale(d_loss).backward()
+                scaler.step(opt_d)
+                global_step += 1
 
+                d_loss_sum += float(d_loss.item())
+                d_real_sum += float(d_real.mean().item())
+                d_fake_sum += float(d_fake.mean().item())
+                d_adv_sum += float(d_parts.adv.item())
+                gp_sum += float(d_parts.gp.item())
+                r1_penalty_sum += float(d_parts.r1.item())
+                r2_penalty_sum += float(d_parts.r2.item())
 
-            scaler.scale(d_loss).backward()
-            scaler.step(opt_d)
+            d_loss_value = d_loss_sum / config.n_critic
+            d_real_mean = d_real_sum / config.n_critic
+            d_fake_mean = d_fake_sum / config.n_critic
+            d_adv_value = d_adv_sum / config.n_critic
+            gp_value = gp_sum / config.n_critic
+            r1_penalty_value = r1_penalty_sum / config.n_critic
+            r2_penalty_value = r2_penalty_sum / config.n_critic
 
+            noise_g = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
             generator.zero_grad(set_to_none=True)
             with autocast_context():
-                fake_for_g = generator(noise)
+                fake_for_g = generator(noise_g)
                 fake_for_g_aug = _diffaugment(fake_for_g, ada_p, config.ada_policy) if config.use_ada else fake_for_g
                 output = discriminator(fake_for_g_aug)
                 g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
@@ -311,14 +338,7 @@ def train(config: TrainConfig) -> None:
             scaler.update()
             _update_ema(generator_ema, generator, config.ema_beta)
 
-            d_real_mean = float(d_real.mean().item())
-            d_fake_mean = float(d_fake.mean().item())
-            d_loss_value = float(d_loss.item())
             g_loss_value = float(g_loss.item())
-            d_adv_value = float(d_parts.adv.item())
-            gp_value = float(d_parts.gp.item())
-            r1_penalty_value = float(d_parts.r1.item())
-            r2_penalty_value = float(d_parts.r2.item())
 
             progress.set_postfix({
                 "D_loss": f"{d_loss_value:.4f}",
@@ -331,7 +351,6 @@ def train(config: TrainConfig) -> None:
                 "r2_penalty": f"{r2_penalty_value:.4f}",
                 "ada_p": f"{ada_p:.3f}",
             })
-            global_step += 1
             tracker.log_metrics({
                 "train/d_loss_step": d_loss_value,
                 "train/g_loss_step": g_loss_value,

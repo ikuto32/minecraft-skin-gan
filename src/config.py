@@ -64,6 +64,7 @@ class TrainConfig(SchemaModel):
     data_dir: Path = Path("data/skins")
     epochs: int = Field(default=100, gt=0)
     batch_size: int = Field(default=64, gt=0)
+    n_critic: int = Field(default=1, ge=1)
     z_dim: int = Field(default=100, gt=0)
     lr: float = 2e-4
     lr_g: float | None = None

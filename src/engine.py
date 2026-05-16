@@ -5,6 +5,7 @@ import random
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
@@ -59,22 +60,55 @@ def _update_ema(ema_model: nn.Module, model: nn.Module, beta: float) -> None:
             ema_buffer.copy_(buffer)
 
 
-def _augment(images: torch.Tensor, p: float) -> torch.Tensor:
+def _rand_apply(images: torch.Tensor, p: float) -> torch.Tensor:
+    if p >= 1.0:
+        return torch.ones(images.shape[0], 1, 1, 1, device=images.device, dtype=images.dtype)
+    return (torch.rand(images.shape[0], 1, 1, 1, device=images.device) < p).to(images.dtype)
+
+
+def _diffaugment(images: torch.Tensor, p: float, policy: str) -> torch.Tensor:
     if p <= 0.0:
         return images
 
-    batch = images.shape[0]
-    device = images.device
+    policies = {x.strip().lower() for x in policy.split(",") if x.strip()}
+    out = images
 
-    flip_mask = (torch.rand(batch, 1, 1, 1, device=device) < (p * 0.5)).to(images.dtype)
-    flipped = torch.flip(images, dims=[3])
-    images = flip_mask * flipped + (1.0 - flip_mask) * images
+    if "flip" in policies:
+        apply = _rand_apply(out, p * 0.5)
+        out = apply * torch.flip(out, dims=[3]) + (1.0 - apply) * out
 
-    if p > 0.25:
-        noise_std = 0.05 * min(1.0, p)
-        images = images + torch.randn_like(images) * noise_std
+    if "noise" in policies and p > 0.15:
+        out = out + torch.randn_like(out) * (0.05 * min(1.0, p))
 
-    return images.clamp_(-1.0, 1.0)
+    if "color" in policies:
+        apply = _rand_apply(out, p)
+        brightness = (torch.rand(out.shape[0], 1, 1, 1, device=out.device) - 0.5) * 0.3
+        contrast = 1.0 + (torch.rand(out.shape[0], 1, 1, 1, device=out.device) - 0.5) * 0.4
+        colored = (out + brightness) * contrast
+        out = apply * colored + (1.0 - apply) * out
+
+    if "translation" in policies:
+        apply = _rand_apply(out, p)
+        max_shift = max(1, int(round(out.shape[-1] * 0.125)))
+        shift_x = torch.randint(-max_shift, max_shift + 1, (out.shape[0],), device=out.device)
+        shift_y = torch.randint(-max_shift, max_shift + 1, (out.shape[0],), device=out.device)
+        translated = torch.stack([torch.roll(out[i], shifts=(int(shift_y[i]), int(shift_x[i])), dims=(1, 2)) for i in range(out.shape[0])], dim=0)
+        out = apply * translated + (1.0 - apply) * out
+
+    if "cutout" in policies and p > 0.2:
+        cut = int(round(out.shape[-1] * 0.25))
+        cut = max(2, min(out.shape[-1] - 1, cut))
+        for i in range(out.shape[0]):
+            if torch.rand(1, device=out.device).item() < p:
+                cx = torch.randint(0, out.shape[-1], (1,), device=out.device).item()
+                cy = torch.randint(0, out.shape[-2], (1,), device=out.device).item()
+                x0 = max(0, cx - cut // 2)
+                x1 = min(out.shape[-1], x0 + cut)
+                y0 = max(0, cy - cut // 2)
+                y1 = min(out.shape[-2], y0 + cut)
+                out[i, :, y0:y1, x0:x1] = 0.0
+
+    return out.clamp_(-1.0, 1.0)
 
 
 def train(config: TrainConfig) -> None:
@@ -166,6 +200,7 @@ def train(config: TrainConfig) -> None:
     global_step = 0
     ada_p = 0.0
     ada_sign_accum = 0.0
+    ada_grad_accum = 0.0
     ada_seen = 0
 
     start_epoch = 0
@@ -218,8 +253,10 @@ def train(config: TrainConfig) -> None:
             discriminator.zero_grad(set_to_none=True)
             with autocast_context():
                 fake = generator(noise)
-                real_for_d = _augment(real, ada_p) if config.use_ada else real
-                fake_for_d = _augment(fake.detach(), ada_p) if config.use_ada else fake.detach()
+                real_for_d = _diffaugment(real, ada_p, config.ada_policy) if config.use_ada else real
+                if config.use_ada:
+                    real_for_d = real_for_d.detach().requires_grad_(True)
+                fake_for_d = _diffaugment(fake.detach(), ada_p, config.ada_policy) if config.use_ada else fake.detach()
                 d_real = discriminator(real_for_d)
                 d_fake = discriminator(fake_for_d)
                 d_parts = loss_strategy.discriminator_loss(
@@ -235,11 +272,25 @@ def train(config: TrainConfig) -> None:
             if config.use_ada:
                 ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
                 ada_seen += d_real.numel()
+                real_grad = torch.autograd.grad(
+                    outputs=d_real.sum(),
+                    inputs=real_for_d,
+                    create_graph=False,
+                    retain_graph=True,
+                    only_inputs=True,
+                    allow_unused=False,
+                )[0]
+                ada_grad_accum += real_grad.detach().float().pow(2).mean().sqrt().item()
                 if global_step > 0 and global_step % config.ada_interval == 0 and ada_seen > 0:
                     ada_sign = ada_sign_accum / ada_seen
-                    adjust = (ada_sign - config.ada_target) * config.ada_speed
-                    ada_p = float(min(1.0, max(0.0, ada_p + adjust)))
+                    ada_grad = ada_grad_accum / config.ada_interval
+                    sign_term = (ada_sign - config.ada_target)
+                    grad_term = (ada_grad - config.ada_grad_target) / max(config.ada_grad_target, 1e-8)
+                    wsum = config.ada_sign_weight + config.ada_grad_weight
+                    combined = (config.ada_sign_weight * sign_term + config.ada_grad_weight * grad_term) / wsum
+                    ada_p = float(min(1.0, max(0.0, ada_p + (combined * config.ada_speed))))
                     ada_sign_accum = 0.0
+                    ada_grad_accum = 0.0
                     ada_seen = 0
 
 
@@ -249,7 +300,7 @@ def train(config: TrainConfig) -> None:
             generator.zero_grad(set_to_none=True)
             with autocast_context():
                 fake_for_g = generator(noise)
-                fake_for_g_aug = _augment(fake_for_g, ada_p) if config.use_ada else fake_for_g
+                fake_for_g_aug = _diffaugment(fake_for_g, ada_p, config.ada_policy) if config.use_ada else fake_for_g
                 output = discriminator(fake_for_g_aug)
                 g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
 
@@ -286,6 +337,7 @@ def train(config: TrainConfig) -> None:
                 "train/gp_step": gp_value,
                 "train/r1_penalty_step": r1_penalty_value,
                 "train/ada_p_step": ada_p,
+                "train/ada_grad_step": float(ada_grad_accum / max(1, (global_step % config.ada_interval) + 1)) if config.use_ada else 0.0,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
                 "train/lr_d": float(opt_d.param_groups[0]["lr"]),
             }, step=global_step)

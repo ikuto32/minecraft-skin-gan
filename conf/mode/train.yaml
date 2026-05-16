@@ -36,6 +36,10 @@ kid_subset_size: 32
 ema_beta: 0.999
 use_ada: true
 ada_target: 0.6
+ada_grad_target: 0.2
+ada_sign_weight: 0.7
+ada_grad_weight: 0.3
+ada_policy: flip,noise,color,translation,cutout
 ada_interval: 4
 ada_speed: 0.001
 checkpoint_dir: checkpoints

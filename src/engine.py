@@ -193,6 +193,8 @@ def train(config: TrainConfig) -> None:
         r1_interval=config.loss.r1_interval,
         r2_gamma=config.loss.r2_gamma,
         r2_interval=config.loss.r2_interval,
+        rel_scale=config.loss.rel_scale,
+        rel_margin=config.loss.rel_margin,
     )
 
     fixed_noise = torch.randn(64, config.z_dim, 1, 1, device=device)
@@ -324,6 +326,7 @@ def train(config: TrainConfig) -> None:
             gp_value = gp_sum / config.n_critic
             r1_penalty_value = r1_penalty_sum / config.n_critic
             r2_penalty_value = r2_penalty_sum / config.n_critic
+            d_reg_value = d_loss_value - d_adv_value
 
             noise_g = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
             generator.zero_grad(set_to_none=True)
@@ -360,6 +363,11 @@ def train(config: TrainConfig) -> None:
                 "train/gp_step": gp_value,
                 "train/r1_penalty_step": r1_penalty_value,
                 "train/r2_penalty_step": r2_penalty_value,
+                "loss/d_adv_step": d_adv_value,
+                "loss/reg_step": d_reg_value,
+                "loss/gp_step": gp_value,
+                "loss/r1_step": r1_penalty_value,
+                "loss/r2_step": r2_penalty_value,
                 "train/ada_p_step": ada_p,
                 "train/ada_grad_step": float(ada_grad_accum / max(1, (global_step % config.ada_interval) + 1)) if config.use_ada else 0.0,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
@@ -381,6 +389,11 @@ def train(config: TrainConfig) -> None:
             "train/gp": gp_value,
             "train/r1_penalty": r1_penalty_value,
             "train/r2_penalty": r2_penalty_value,
+            "loss/d_adv": d_adv_value,
+            "loss/reg": d_reg_value,
+            "loss/gp": gp_value,
+            "loss/r1": r1_penalty_value,
+            "loss/r2": r2_penalty_value,
             "train/ada_p": ada_p,
             "train/epoch": epoch + 1,
         }, step=global_step, epoch=epoch + 1)

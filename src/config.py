@@ -41,12 +41,14 @@ class TrackingConfig(SchemaModel):
 
 
 class LossConfig(SchemaModel):
-    name: Literal["hinge", "wgan_gp", "logistic_r1"] = "hinge"
+    name: Literal["hinge", "wgan_gp", "logistic_r1", "r3gan_relativistic"] = "hinge"
     gp_lambda: float = 10.0
     r1_gamma: float = 10.0
     r1_interval: int = Field(default=16, gt=0)
     r2_gamma: float = 0.0
     r2_interval: int = Field(default=16, gt=0)
+    rel_scale: float = 1.0
+    rel_margin: float = 0.0
 
     @model_validator(mode="after")
     def _validate_loss(self) -> "LossConfig":
@@ -56,6 +58,8 @@ class LossConfig(SchemaModel):
             raise ValueError("loss.r1_interval must be > 0 for logistic_r1")
         if self.name == "logistic_r1" and self.r2_interval <= 0:
             raise ValueError("loss.r2_interval must be > 0 for logistic_r1")
+        if self.name == "r3gan_relativistic" and self.rel_scale <= 0:
+            raise ValueError("loss.rel_scale must be > 0 for r3gan_relativistic")
         return self
 
 

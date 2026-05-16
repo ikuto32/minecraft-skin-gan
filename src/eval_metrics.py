@@ -30,6 +30,16 @@ def generate_fake_batch(generator: nn.Module, noise: torch.Tensor) -> torch.Tens
     return (fake + 1.0) / 2.0
 
 
+def _metric_sample_count(metric: object, *, real: bool) -> int | None:
+    attr_name = "real_features_num_samples" if real else "fake_features_num_samples"
+    raw = getattr(metric, attr_name, None)
+    if raw is None:
+        return None
+    if isinstance(raw, torch.Tensor):
+        return int(raw.item())
+    return int(raw)
+
+
 def compute_metrics(
     *,
     cfg: EvalConfig,
@@ -85,7 +95,29 @@ def compute_metrics(
     if seen < 2:
         raise ValueError("Need at least 2 generated samples to compute FID/KID metrics")
 
-    fid_value = float(fid.compute().item())
+    real_count = _metric_sample_count(fid, real=True)
+    fake_count = _metric_sample_count(fid, real=False)
+    if real_count is not None and real_count < 2:
+        raise ValueError(
+            "Need at least 2 real samples to compute FID. "
+            f"Got {real_count}; clear cached real features and increase eval.sample_count."
+        )
+    if fake_count is not None and fake_count < 2:
+        raise ValueError(
+            "Need at least 2 generated samples to compute FID. "
+            f"Got {fake_count}; increase eval.sample_count."
+        )
+
+    try:
+        fid_value = float(fid.compute().item())
+    except RuntimeError as exc:
+        message = str(exc)
+        if "More than one sample is required" in message:
+            raise ValueError(
+                "FID requires at least 2 real and 2 generated samples. "
+                "Try increasing eval.sample_count and deleting cached real features."
+            ) from exc
+        raise
     kid_mean, kid_std = kid.compute()
     return EvalMetricsResult(
         fid=fid_value,

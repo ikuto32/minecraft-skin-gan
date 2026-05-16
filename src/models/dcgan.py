@@ -152,7 +152,7 @@ class ResConvGenerator(nn.Module):
     ):
         super().__init__()
         self.proj = nn.Sequential(
-            nn.Conv2d(z_dim, features * 8, kernel_size=4, stride=1, padding=0, bias=False),
+            nn.ConvTranspose2d(z_dim, features * 8, kernel_size=4, stride=1, padding=0, bias=False),
             _make_norm(norm_type=norm_type, channels=features * 8, spatial_size=4),
             nn.ReLU(True),
         )

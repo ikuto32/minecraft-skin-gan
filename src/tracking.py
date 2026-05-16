@@ -72,16 +72,6 @@ class Tracker:
             wandb.define_metric("eval/*", step_metric="epoch")
             wandb.define_metric("eval/precision", step_metric="epoch")
             wandb.define_metric("eval/recall", step_metric="epoch")
-        elif self.backend == "mlflow":
-            import mlflow
-
-            if cfg.mlflow_tracking_uri:
-                mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
-            mlflow.set_experiment(cfg.mlflow_experiment)
-            self.run = mlflow.start_run(run_name=cfg.run_name)
-            mlflow.log_params(_flatten(full_config))
-            mlflow.log_params(common_tags)
-            mlflow.set_tags(common_tags)
 
     def log_metrics(self, metrics: dict[str, float | int], *, step: int | None = None, epoch: int | None = None) -> None:
         payload = dict(metrics)
@@ -94,21 +84,12 @@ class Tracker:
             import wandb
 
             wandb.log(payload, step=step)
-        elif self.backend == "mlflow":
-            import mlflow
-
-            numeric_payload = {k: float(v) for k, v in payload.items() if isinstance(v, (int, float))}
-            mlflow.log_metrics(numeric_payload, step=step if step is not None else epoch)
 
     def log_image(self, key: str, image_path: Path, step: int) -> None:
         if self.backend == "wandb":
             import wandb
 
             wandb.log({key: wandb.Image(str(image_path))}, step=step)
-        elif self.backend == "mlflow":
-            import mlflow
-
-            mlflow.log_artifact(str(image_path), artifact_path=f"images/step_{step}")
 
     def log_artifact(self, path: Path, artifact_path: str | None = None) -> None:
         if self.backend == "wandb":
@@ -117,10 +98,6 @@ class Tracker:
             artifact = wandb.Artifact(name=f"run-artifacts-{wandb.run.id}", type="run-data")
             artifact.add_file(str(path), name=f"{artifact_path}/{path.name}" if artifact_path else path.name)
             wandb.log_artifact(artifact)
-        elif self.backend == "mlflow":
-            import mlflow
-
-            mlflow.log_artifact(str(path), artifact_path=artifact_path)
 
     def log_histogram(self, key: str, values: torch.Tensor, step: int) -> None:
         if self.backend == "wandb":
@@ -134,20 +111,12 @@ class Tracker:
 
             for key, value in values.items():
                 wandb.run.summary[key] = value
-        elif self.backend == "mlflow":
-            import mlflow
-
-            mlflow.log_metrics({f"summary/{k}": float(v) for k, v in values.items()})
 
     def close(self) -> None:
         if self.backend == "wandb":
             import wandb
 
             wandb.finish()
-        elif self.backend == "mlflow":
-            import mlflow
-
-            mlflow.end_run()
 
     def _build_common_tags(
         self,
@@ -237,14 +206,3 @@ class Tracker:
 
         digest = hashlib.sha256("\n".join(manifest).encode("utf-8")).hexdigest()
         return f"sha256:{digest}"
-
-
-def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for k, v in d.items():
-        key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            out.update(_flatten(v, key))
-        else:
-            out[key] = v
-    return out

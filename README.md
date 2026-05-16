@@ -59,11 +59,11 @@ uv run python main.py mode=train performance_profile=auto
 uv run python main.py mode=train performance_profile=safe
 ```
 
-## 追跡（W&B / MLflow）
+## 追跡（W&B）
 
 ### 異常時にまず見るメトリクス（運用ガイド）
 
-学習が不安定なときは、まず以下の診断キーを確認してください（W&B / MLflowで同一キー）。
+学習が不安定なときは、まず以下の診断キーを確認してください（W&Bで確認可能）。
 
 - `diag/d_real_mean`, `diag/d_fake_mean`, `diag/d_real_var`, `diag/d_fake_var`
   - Dが飽和すると `d_real_mean` が高止まり、`d_fake_mean` が極端に低下しやすい。
@@ -79,18 +79,6 @@ uv run python main.py mode=train performance_profile=safe
 ```bash
 uv run python main.py mode=train tracking.backend=wandb tracking.project=minecraft-skin-gan
 ```
-
-### MLflow
-
-```bash
-uv run python main.py mode=train \
-  tracking.backend=mlflow \
-  tracking.mlflow_tracking_uri=http://127.0.0.1:5000 \
-  tracking.mlflow_experiment=minecraft-skin-gan
-```
-
-- 学習loss / eval(FID, KID)をメトリクスとして記録
-- 各epochの生成画像をartifactとして記録
 
 ## 自動resume + ベストモデル保存
 

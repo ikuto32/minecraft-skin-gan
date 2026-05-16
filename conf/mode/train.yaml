@@ -53,5 +53,3 @@ tracking:
   project: minecraft-skin-gan
   run_name: null
   entity: null
-  mlflow_tracking_uri: null
-  mlflow_experiment: minecraft-skin-gan

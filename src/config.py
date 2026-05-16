@@ -32,12 +32,10 @@ class SchemaModel(BaseModel):
 
 
 class TrackingConfig(SchemaModel):
-    backend: Literal["none", "wandb", "mlflow"] = "none"
+    backend: Literal["none", "wandb"] = "none"
     project: str = "minecraft-skin-gan"
     run_name: str | None = None
     entity: str | None = None
-    mlflow_tracking_uri: str | None = None
-    mlflow_experiment: str = "minecraft-skin-gan"
 
 
 class LossConfig(SchemaModel):

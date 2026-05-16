@@ -9,6 +9,7 @@ from torchmetrics.image.kid import KernelInceptionDistance
 
 from src.config import EvalConfig
 import torch.nn as nn
+from tqdm import tqdm
 
 
 @dataclass(frozen=True)
@@ -46,10 +47,12 @@ def compute_metrics(
     loader: DataLoader,
     generator: nn.Module,
     device: str,
-    real_features_state: dict[str, object] | None,
-    cache_real_only: bool,
-) -> EvalMetricsResult | dict[str, object]:
-    fid = FrechetInceptionDistance(feature=2048, normalize=False).to(device)
+) -> EvalMetricsResult:
+    fid = FrechetInceptionDistance(
+        feature=2048,
+        normalize=False,
+    ).to(device)
+
     kid = KernelInceptionDistance(
         subset_size=cfg.kid_subset_size,
         subsets=cfg.kid_subsets,
@@ -57,70 +60,156 @@ def compute_metrics(
         normalize=False,
     ).to(device)
 
-    if real_features_state is not None:
-        fid.load_state_dict(real_features_state["fid_state"])
-        kid.load_state_dict(real_features_state["kid_state"])
-    else:
-        seen = 0
+    was_training = generator.training
+    generator.eval()
+
+    try:
+        with torch.inference_mode():
+            real_seen = _update_real_metrics(
+                loader=loader,
+                fid=fid,
+                kid=kid,
+                sample_count=cfg.sample_count,
+                device=device,
+            )
+            if real_seen < 2:
+                raise ValueError(
+                    "Need at least 2 real samples to compute FID/KID metrics"
+                )
+
+            fake_seen = _update_fake_metrics(
+                cfg=cfg,
+                loader=loader,
+                generator=generator,
+                fid=fid,
+                kid=kid,
+                sample_count=cfg.sample_count,
+                device=device,
+            )
+            if fake_seen < 2:
+                raise ValueError(
+                    "Need at least 2 generated samples to compute FID/KID metrics"
+                )
+
+            _validate_fid_sample_counts(fid)
+
+            fid_value = _compute_fid_value(fid)
+            kid_mean, kid_std = kid.compute()
+
+            return EvalMetricsResult(
+                fid=fid_value,
+                kid_mean=float(kid_mean.item()),
+                kid_std=float(kid_std.item()),
+            )
+
+    finally:
+        generator.train(was_training)
+
+
+def _update_real_metrics(
+    *,
+    loader: DataLoader,
+    fid: FrechetInceptionDistance,
+    kid: KernelInceptionDistance,
+    sample_count: int,
+    device: str,
+) -> int:
+    seen = 0
+
+    with tqdm(
+        total=sample_count,
+        desc="Updating real samples",
+        unit="img",
+        leave=False,
+    ) as progress:
         for real in loader:
-            if seen >= cfg.sample_count:
+            if seen >= sample_count:
                 break
-            real = real.to(device)
-            take = min(cfg.sample_count - seen, real.size(0))
-            real = real[:take]
+
+            take = min(sample_count - seen, real.size(0))
+            real = real[:take].to(device, non_blocking=True)
+
             real_u8 = to_uint8_rgb(real)
             fid.update(real_u8, real=True)
             kid.update(real_u8, real=True)
+
             seen += take
-        if seen < 2:
-            raise ValueError("Need at least 2 real samples to compute FID/KID metrics")
+            progress.update(take)
 
-    if cache_real_only:
-        return {
-            "fid_state": fid.state_dict(),
-            "kid_state": kid.state_dict(),
-        }
+    return seen
 
+
+def _update_fake_metrics(
+    *,
+    cfg: EvalConfig,
+    loader: DataLoader,
+    generator: nn.Module,
+    fid: FrechetInceptionDistance,
+    kid: KernelInceptionDistance,
+    sample_count: int,
+    device: str,
+) -> int:
     seen = 0
-    for real in loader:
-        if seen >= cfg.sample_count:
-            break
-        take = min(cfg.sample_count - seen, real.size(0))
-        noise = torch.randn(take, cfg.z_dim, 1, 1, device=device)
-        fake = generate_fake_batch(generator, noise)
-        fake_u8 = to_uint8_rgb(fake)
-        fid.update(fake_u8, real=False)
-        kid.update(fake_u8, real=False)
-        seen += take
-    if seen < 2:
-        raise ValueError("Need at least 2 generated samples to compute FID/KID metrics")
 
+    with tqdm(
+        total=sample_count,
+        desc="Updating generated samples",
+        unit="img",
+        leave=False,
+    ) as progress:
+        for real in loader:
+            if seen >= sample_count:
+                break
+
+            take = min(sample_count - seen, real.size(0))
+
+            noise = torch.randn(
+                take,
+                cfg.z_dim,
+                1,
+                1,
+                device=device,
+            )
+            fake = generate_fake_batch(generator, noise)
+
+            fake_u8 = to_uint8_rgb(fake)
+            fid.update(fake_u8, real=False)
+            kid.update(fake_u8, real=False)
+
+            seen += take
+            progress.update(take)
+
+    return seen
+
+
+def _validate_fid_sample_counts(
+    fid: FrechetInceptionDistance,
+) -> None:
     real_count = _metric_sample_count(fid, real=True)
     fake_count = _metric_sample_count(fid, real=False)
+
     if real_count is not None and real_count < 2:
         raise ValueError(
             "Need at least 2 real samples to compute FID. "
-            f"Got {real_count}; clear cached real features and increase eval.sample_count."
+            f"Got {real_count}; increase eval.sample_count."
         )
+
     if fake_count is not None and fake_count < 2:
         raise ValueError(
             "Need at least 2 generated samples to compute FID. "
             f"Got {fake_count}; increase eval.sample_count."
         )
 
+
+def _compute_fid_value(
+    fid: FrechetInceptionDistance,
+) -> float:
     try:
-        fid_value = float(fid.compute().item())
+        return float(fid.compute().item())
     except RuntimeError as exc:
-        message = str(exc)
-        if "More than one sample is required" in message:
+        if "More than one sample is required" in str(exc):
             raise ValueError(
                 "FID requires at least 2 real and 2 generated samples. "
-                "Try increasing eval.sample_count and deleting cached real features."
+                "Try increasing eval.sample_count."
             ) from exc
         raise
-    kid_mean, kid_std = kid.compute()
-    return EvalMetricsResult(
-        fid=fid_value,
-        kid_mean=float(kid_mean.item()),
-        kid_std=float(kid_std.item()),
-    )

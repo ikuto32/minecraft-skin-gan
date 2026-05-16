@@ -132,8 +132,6 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
             loader=loader,
             generator=generator,
             device=device,
-            real_features_state=None,
-            cache_real_only=True,
         )
         if cfg.reuse_real_features:
             torch.save(
@@ -166,8 +164,6 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
                 loader=loader,
                 generator=generator,
                 device=device,
-                real_features_state=real_metrics_state,
-                cache_real_only=False,
             )
         except ValueError as exc:
             if (not retried_without_cache) and "Need at least 2 real samples to compute FID" in str(exc):
@@ -177,8 +173,6 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
                     loader=loader,
                     generator=generator,
                     device=device,
-                    real_features_state=None,
-                    cache_real_only=True,
                 )
                 if cfg.reuse_real_features:
                     torch.save(
@@ -200,8 +194,6 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
                     loader=loader,
                     generator=generator,
                     device=device,
-                    real_features_state=real_metrics_state,
-                    cache_real_only=False,
                 )
             else:
                 raise

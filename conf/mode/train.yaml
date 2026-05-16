@@ -17,6 +17,8 @@ loss:
   gp_lambda: 10.0
   r1_gamma: 10.0
   r1_interval: 16
+  r2_gamma: 10.0
+  r2_interval: 16
 compile: false
 channels_last: true
 amp_dtype: bfloat16

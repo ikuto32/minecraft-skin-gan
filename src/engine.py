@@ -191,6 +191,8 @@ def train(config: TrainConfig) -> None:
         gp_lambda=config.loss.gp_lambda,
         r1_gamma=config.loss.r1_gamma,
         r1_interval=config.loss.r1_interval,
+        r2_gamma=config.loss.r2_gamma,
+        r2_interval=config.loss.r2_interval,
     )
 
     fixed_noise = torch.randn(64, config.z_dim, 1, 1, device=device)
@@ -316,6 +318,7 @@ def train(config: TrainConfig) -> None:
             d_adv_value = float(d_parts.adv.item())
             gp_value = float(d_parts.gp.item())
             r1_penalty_value = float(d_parts.r1.item())
+            r2_penalty_value = float(d_parts.r2.item())
 
             progress.set_postfix({
                 "D_loss": f"{d_loss_value:.4f}",
@@ -325,6 +328,7 @@ def train(config: TrainConfig) -> None:
                 "d_adv": f"{d_adv_value:.4f}",
                 "gp": f"{gp_value:.4f}",
                 "r1_penalty": f"{r1_penalty_value:.4f}",
+                "r2_penalty": f"{r2_penalty_value:.4f}",
                 "ada_p": f"{ada_p:.3f}",
             })
             global_step += 1
@@ -336,6 +340,7 @@ def train(config: TrainConfig) -> None:
                 "train/d_adv_step": d_adv_value,
                 "train/gp_step": gp_value,
                 "train/r1_penalty_step": r1_penalty_value,
+                "train/r2_penalty_step": r2_penalty_value,
                 "train/ada_p_step": ada_p,
                 "train/ada_grad_step": float(ada_grad_accum / max(1, (global_step % config.ada_interval) + 1)) if config.use_ada else 0.0,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
@@ -356,6 +361,7 @@ def train(config: TrainConfig) -> None:
             "train/d_adv": d_adv_value,
             "train/gp": gp_value,
             "train/r1_penalty": r1_penalty_value,
+            "train/r2_penalty": r2_penalty_value,
             "train/ada_p": ada_p,
             "train/epoch": epoch + 1,
         }, step=global_step, epoch=epoch + 1)

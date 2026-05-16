@@ -17,4 +17,3 @@ device: null
 epoch: null
 resize: 64
 color_mode: RGBA
-reuse_real_features: true

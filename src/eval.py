@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 from src.config import EvalConfig
-from src.eval_io import EvalResult, append_metrics_history, save_latest_metrics
+from src.eval_io import EvalResult, append_metrics_history, save_latest_metrics, save_seed_metrics
 from src.eval_metrics import compute_metrics
 from src.eval_plot import plot_metrics
 from src.models import resolve_model
@@ -98,6 +98,8 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     fid_values: list[float] = []
     kid_mean_values: list[float] = []
     kid_std_values: list[float] = []
+    precision_values: list[float] = []
+    recall_values: list[float] = []
 
     for seed in seeds:
         random.seed(seed)
@@ -110,36 +112,49 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
             device=device,
         )
 
-        fid_values.append(metric_values.fid)
-        kid_mean_values.append(metric_values.kid_mean)
-        kid_std_values.append(metric_values.kid_std)
-        metrics_by_seed[seed] = {
-            "fid": metric_values.fid,
-            "kid_mean": metric_values.kid_mean,
-            "kid_std": metric_values.kid_std,
-        }
+        if metric_values.fid is not None:
+            fid_values.append(metric_values.fid)
+        if metric_values.kid_mean is not None and metric_values.kid_std is not None:
+            kid_mean_values.append(metric_values.kid_mean)
+            kid_std_values.append(metric_values.kid_std)
+        if metric_values.precision is not None and metric_values.recall is not None:
+            precision_values.append(metric_values.precision)
+            recall_values.append(metric_values.recall)
+        metrics_by_seed[seed] = {k: float(v) for k, v in metric_values.__dict__.items() if v is not None}
 
-    fid_mean = _mean(fid_values)
-    kid_mean_mean = _mean(kid_mean_values)
-    kid_std_mean = _mean(kid_std_values)
+    fid_mean = _mean(fid_values) if fid_values else float("nan")
+    kid_mean_mean = _mean(kid_mean_values) if kid_mean_values else float("nan")
+    kid_std_mean = _mean(kid_std_values) if kid_std_values else float("nan")
+    precision_mean = _mean(precision_values) if precision_values else float("nan")
+    recall_mean = _mean(recall_values) if recall_values else float("nan")
 
     result = EvalResult(
         epoch=cfg.epoch if cfg.epoch is not None else int(ckpt.get("epoch", -1)) + 1,
         fid=fid_mean,
-        fid_std=_std(fid_values, fid_mean),
-        fid_best=min(fid_values),
-        fid_worst=max(fid_values),
+        fid_std=_std(fid_values, fid_mean) if fid_values else 0.0,
+        fid_best=min(fid_values) if fid_values else 0.0,
+        fid_worst=max(fid_values) if fid_values else 0.0,
         kid_mean=kid_mean_mean,
         kid_std=kid_std_mean,
-        kid_mean_std=_std(kid_mean_values, kid_mean_mean),
-        kid_mean_best=min(kid_mean_values),
-        kid_mean_worst=max(kid_mean_values),
+        kid_mean_std=_std(kid_mean_values, kid_mean_mean) if kid_mean_values else 0.0,
+        kid_mean_best=min(kid_mean_values) if kid_mean_values else 0.0,
+        kid_mean_worst=max(kid_mean_values) if kid_mean_values else 0.0,
+        precision=precision_mean,
+        precision_std=_std(precision_values, precision_mean) if precision_values else 0.0,
+        precision_best=max(precision_values) if precision_values else 0.0,
+        precision_worst=min(precision_values) if precision_values else 0.0,
+        recall=recall_mean,
+        recall_std=_std(recall_values, recall_mean) if recall_values else 0.0,
+        recall_best=max(recall_values) if recall_values else 0.0,
+        recall_worst=min(recall_values) if recall_values else 0.0,
         sample_count=cfg.sample_count,
         seed=seeds[0],
         seeds=seeds,
+        by_seed=metrics_by_seed,
     )
 
     save_latest_metrics(result, cfg.output_dir)
+    save_seed_metrics(result, cfg.output_dir)
     history_path = append_metrics_history(result, cfg.output_dir)
     plot_metrics(history_path, cfg.output_dir / "metrics.png")
     print(json.dumps({"summary": result.__dict__, "by_seed": metrics_by_seed}, indent=2))

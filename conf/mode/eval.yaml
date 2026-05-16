@@ -13,6 +13,9 @@ seeds: null
 num_workers: 0
 kid_subsets: 50
 kid_subset_size: 32
+enable_fid: true
+enable_kid: true
+enable_precision_recall: true
 device: null
 epoch: null
 resize: 64

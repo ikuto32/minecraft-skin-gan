@@ -5,6 +5,7 @@ import random
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
@@ -59,22 +60,55 @@ def _update_ema(ema_model: nn.Module, model: nn.Module, beta: float) -> None:
             ema_buffer.copy_(buffer)
 
 
-def _augment(images: torch.Tensor, p: float) -> torch.Tensor:
+def _rand_apply(images: torch.Tensor, p: float) -> torch.Tensor:
+    if p >= 1.0:
+        return torch.ones(images.shape[0], 1, 1, 1, device=images.device, dtype=images.dtype)
+    return (torch.rand(images.shape[0], 1, 1, 1, device=images.device) < p).to(images.dtype)
+
+
+def _diffaugment(images: torch.Tensor, p: float, policy: str) -> torch.Tensor:
     if p <= 0.0:
         return images
 
-    batch = images.shape[0]
-    device = images.device
+    policies = {x.strip().lower() for x in policy.split(",") if x.strip()}
+    out = images
 
-    flip_mask = (torch.rand(batch, 1, 1, 1, device=device) < (p * 0.5)).to(images.dtype)
-    flipped = torch.flip(images, dims=[3])
-    images = flip_mask * flipped + (1.0 - flip_mask) * images
+    if "flip" in policies:
+        apply = _rand_apply(out, p * 0.5)
+        out = apply * torch.flip(out, dims=[3]) + (1.0 - apply) * out
 
-    if p > 0.25:
-        noise_std = 0.05 * min(1.0, p)
-        images = images + torch.randn_like(images) * noise_std
+    if "noise" in policies and p > 0.15:
+        out = out + torch.randn_like(out) * (0.05 * min(1.0, p))
 
-    return images.clamp_(-1.0, 1.0)
+    if "color" in policies:
+        apply = _rand_apply(out, p)
+        brightness = (torch.rand(out.shape[0], 1, 1, 1, device=out.device) - 0.5) * 0.3
+        contrast = 1.0 + (torch.rand(out.shape[0], 1, 1, 1, device=out.device) - 0.5) * 0.4
+        colored = (out + brightness) * contrast
+        out = apply * colored + (1.0 - apply) * out
+
+    if "translation" in policies:
+        apply = _rand_apply(out, p)
+        max_shift = max(1, int(round(out.shape[-1] * 0.125)))
+        shift_x = torch.randint(-max_shift, max_shift + 1, (out.shape[0],), device=out.device)
+        shift_y = torch.randint(-max_shift, max_shift + 1, (out.shape[0],), device=out.device)
+        translated = torch.stack([torch.roll(out[i], shifts=(int(shift_y[i]), int(shift_x[i])), dims=(1, 2)) for i in range(out.shape[0])], dim=0)
+        out = apply * translated + (1.0 - apply) * out
+
+    if "cutout" in policies and p > 0.2:
+        cut = int(round(out.shape[-1] * 0.25))
+        cut = max(2, min(out.shape[-1] - 1, cut))
+        for i in range(out.shape[0]):
+            if torch.rand(1, device=out.device).item() < p:
+                cx = torch.randint(0, out.shape[-1], (1,), device=out.device).item()
+                cy = torch.randint(0, out.shape[-2], (1,), device=out.device).item()
+                x0 = max(0, cx - cut // 2)
+                x1 = min(out.shape[-1], x0 + cut)
+                y0 = max(0, cy - cut // 2)
+                y1 = min(out.shape[-2], y0 + cut)
+                out[i, :, y0:y1, x0:x1] = 0.0
+
+    return out.clamp_(-1.0, 1.0)
 
 
 def train(config: TrainConfig) -> None:
@@ -149,22 +183,30 @@ def train(config: TrainConfig) -> None:
 
     discriminator = model_spec.discriminator_cls(**model_spec.discriminator_hparams).to(device, memory_format=memory_format)
 
-    opt_g = optim.Adam(generator.parameters(), lr=config.lr, betas=(0.5, 0.999))
-    opt_d = optim.Adam(discriminator.parameters(), lr=config.lr, betas=(0.5, 0.999))
+    opt_g = optim.Adam(generator.parameters(), lr=config.lr_g, betas=(0.5, 0.999))
+    opt_d = optim.Adam(discriminator.parameters(), lr=config.lr_d, betas=(0.5, 0.999))
+    print(f"TTUR learning rates -> lr_g={config.lr_g:.6g}, lr_d={config.lr_d:.6g}")
     loss_strategy = build_gan_loss(
         config.loss.name,
         gp_lambda=config.loss.gp_lambda,
         r1_gamma=config.loss.r1_gamma,
         r1_interval=config.loss.r1_interval,
+        r2_gamma=config.loss.r2_gamma,
+        r2_interval=config.loss.r2_interval,
+        rel_scale=config.loss.rel_scale,
+        rel_margin=config.loss.rel_margin,
     )
 
     fixed_noise = torch.randn(64, config.z_dim, 1, 1, device=device)
     amp_enabled = device == "cuda" and amp_dtype_name != "none"
     amp_dtype = torch.bfloat16 if amp_dtype_name == "bfloat16" else torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda" and amp_dtype_name == "float16")
+    # global_step is defined as the number of discriminator updates.
+    # This keeps step-based regularization intervals (R1/R2, ADA) aligned with D updates.
     global_step = 0
     ada_p = 0.0
     ada_sign_accum = 0.0
+    ada_grad_accum = 0.0
     ada_seen = 0
 
     start_epoch = 0
@@ -207,48 +249,90 @@ def train(config: TrainConfig) -> None:
                 real = real.contiguous(memory_format=torch.channels_last)
             batch_size = real.size(0)
 
-            noise = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
-
             def autocast_context():
                 if amp_enabled:
                     return torch.autocast(device_type="cuda", dtype=amp_dtype)
                 return contextlib.nullcontext()
 
-            discriminator.zero_grad(set_to_none=True)
-            with autocast_context():
-                fake = generator(noise)
-                real_for_d = _augment(real, ada_p) if config.use_ada else real
-                fake_for_d = _augment(fake.detach(), ada_p) if config.use_ada else fake.detach()
-                d_real = discriminator(real_for_d)
-                d_fake = discriminator(fake_for_d)
-                d_parts = loss_strategy.discriminator_loss(
-                    d_real=d_real,
-                    d_fake=d_fake,
-                    real_images=real_for_d,
-                    fake_images=fake_for_d,
-                    discriminator=discriminator,
-                    step=global_step,
-                )
-                d_loss = d_parts.loss
+            d_loss_sum = 0.0
+            d_real_sum = 0.0
+            d_fake_sum = 0.0
+            d_adv_sum = 0.0
+            gp_sum = 0.0
+            r1_penalty_sum = 0.0
+            r2_penalty_sum = 0.0
 
-            if config.use_ada:
-                ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
-                ada_seen += d_real.numel()
-                if global_step > 0 and global_step % config.ada_interval == 0 and ada_seen > 0:
-                    ada_sign = ada_sign_accum / ada_seen
-                    adjust = (ada_sign - config.ada_target) * config.ada_speed
-                    ada_p = float(min(1.0, max(0.0, ada_p + adjust)))
-                    ada_sign_accum = 0.0
-                    ada_seen = 0
+            for _ in range(config.n_critic):
+                noise_d = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
+                discriminator.zero_grad(set_to_none=True)
+                with autocast_context():
+                    fake = generator(noise_d)
+                    real_for_d = _diffaugment(real, ada_p, config.ada_policy) if config.use_ada else real
+                    if config.use_ada:
+                        real_for_d = real_for_d.detach().requires_grad_(True)
+                    fake_for_d = _diffaugment(fake.detach(), ada_p, config.ada_policy) if config.use_ada else fake.detach()
+                    d_real = discriminator(real_for_d)
+                    d_fake = discriminator(fake_for_d)
+                    d_parts = loss_strategy.discriminator_loss(
+                        d_real=d_real,
+                        d_fake=d_fake,
+                        real_images=real_for_d,
+                        fake_images=fake_for_d,
+                        discriminator=discriminator,
+                        step=global_step,
+                    )
+                    d_loss = d_parts.loss
 
+                if config.use_ada:
+                    ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
+                    ada_seen += d_real.numel()
+                    real_grad = torch.autograd.grad(
+                        outputs=d_real.sum(),
+                        inputs=real_for_d,
+                        create_graph=False,
+                        retain_graph=True,
+                        only_inputs=True,
+                        allow_unused=False,
+                    )[0]
+                    ada_grad_accum += real_grad.detach().float().pow(2).mean().sqrt().item()
+                    if global_step > 0 and global_step % config.ada_interval == 0 and ada_seen > 0:
+                        ada_sign = ada_sign_accum / ada_seen
+                        ada_grad = ada_grad_accum / config.ada_interval
+                        sign_term = (ada_sign - config.ada_target)
+                        grad_term = (ada_grad - config.ada_grad_target) / max(config.ada_grad_target, 1e-8)
+                        wsum = config.ada_sign_weight + config.ada_grad_weight
+                        combined = (config.ada_sign_weight * sign_term + config.ada_grad_weight * grad_term) / wsum
+                        ada_p = float(min(1.0, max(0.0, ada_p + (combined * config.ada_speed))))
+                        ada_sign_accum = 0.0
+                        ada_grad_accum = 0.0
+                        ada_seen = 0
 
-            scaler.scale(d_loss).backward()
-            scaler.step(opt_d)
+                scaler.scale(d_loss).backward()
+                scaler.step(opt_d)
+                global_step += 1
 
+                d_loss_sum += float(d_loss.item())
+                d_real_sum += float(d_real.mean().item())
+                d_fake_sum += float(d_fake.mean().item())
+                d_adv_sum += float(d_parts.adv.item())
+                gp_sum += float(d_parts.gp.item())
+                r1_penalty_sum += float(d_parts.r1.item())
+                r2_penalty_sum += float(d_parts.r2.item())
+
+            d_loss_value = d_loss_sum / config.n_critic
+            d_real_mean = d_real_sum / config.n_critic
+            d_fake_mean = d_fake_sum / config.n_critic
+            d_adv_value = d_adv_sum / config.n_critic
+            gp_value = gp_sum / config.n_critic
+            r1_penalty_value = r1_penalty_sum / config.n_critic
+            r2_penalty_value = r2_penalty_sum / config.n_critic
+            d_reg_value = d_loss_value - d_adv_value
+
+            noise_g = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
             generator.zero_grad(set_to_none=True)
             with autocast_context():
-                fake_for_g = generator(noise)
-                fake_for_g_aug = _augment(fake_for_g, ada_p) if config.use_ada else fake_for_g
+                fake_for_g = generator(noise_g)
+                fake_for_g_aug = _diffaugment(fake_for_g, ada_p, config.ada_policy) if config.use_ada else fake_for_g
                 output = discriminator(fake_for_g_aug)
                 g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
 
@@ -257,13 +341,7 @@ def train(config: TrainConfig) -> None:
             scaler.update()
             _update_ema(generator_ema, generator, config.ema_beta)
 
-            d_real_mean = float(d_real.mean().item())
-            d_fake_mean = float(d_fake.mean().item())
-            d_loss_value = float(d_loss.item())
             g_loss_value = float(g_loss.item())
-            d_adv_value = float(d_parts.adv.item())
-            gp_value = float(d_parts.gp.item())
-            r1_penalty_value = float(d_parts.r1.item())
 
             progress.set_postfix({
                 "D_loss": f"{d_loss_value:.4f}",
@@ -273,9 +351,9 @@ def train(config: TrainConfig) -> None:
                 "d_adv": f"{d_adv_value:.4f}",
                 "gp": f"{gp_value:.4f}",
                 "r1_penalty": f"{r1_penalty_value:.4f}",
+                "r2_penalty": f"{r2_penalty_value:.4f}",
                 "ada_p": f"{ada_p:.3f}",
             })
-            global_step += 1
             tracker.log_metrics({
                 "train/d_loss_step": d_loss_value,
                 "train/g_loss_step": g_loss_value,
@@ -284,7 +362,14 @@ def train(config: TrainConfig) -> None:
                 "train/d_adv_step": d_adv_value,
                 "train/gp_step": gp_value,
                 "train/r1_penalty_step": r1_penalty_value,
+                "train/r2_penalty_step": r2_penalty_value,
+                "loss/d_adv_step": d_adv_value,
+                "loss/reg_step": d_reg_value,
+                "loss/gp_step": gp_value,
+                "loss/r1_step": r1_penalty_value,
+                "loss/r2_step": r2_penalty_value,
                 "train/ada_p_step": ada_p,
+                "train/ada_grad_step": float(ada_grad_accum / max(1, (global_step % config.ada_interval) + 1)) if config.use_ada else 0.0,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
                 "train/lr_d": float(opt_d.param_groups[0]["lr"]),
             }, step=global_step)
@@ -303,6 +388,12 @@ def train(config: TrainConfig) -> None:
             "train/d_adv": d_adv_value,
             "train/gp": gp_value,
             "train/r1_penalty": r1_penalty_value,
+            "train/r2_penalty": r2_penalty_value,
+            "loss/d_adv": d_adv_value,
+            "loss/reg": d_reg_value,
+            "loss/gp": gp_value,
+            "loss/r1": r1_penalty_value,
+            "loss/r2": r2_penalty_value,
             "train/ada_p": ada_p,
             "train/epoch": epoch + 1,
         }, step=global_step, epoch=epoch + 1)
@@ -316,6 +407,7 @@ def train(config: TrainConfig) -> None:
             save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
 
         if config.eval_every > 0 and (epoch + 1) % config.eval_every == 0:
+            eval_seeds = config.eval_seeds if config.eval_seeds else None
             eval_result = evaluate(EvalConfig(
                 checkpoint=config.checkpoint_dir / "latest.pt",
                 real_dir=config.data_dir,
@@ -325,17 +417,50 @@ def train(config: TrainConfig) -> None:
                 z_dim=config.z_dim,
                 seed=config.eval_seed,
                 model_name=config.model_name,
-                seeds=config.eval_seeds,
+                seeds=eval_seeds,
                 num_workers=config.eval_num_workers,
                 kid_subsets=config.kid_subsets,
                 kid_subset_size=config.kid_subset_size,
+                enable_fid=True,
+                enable_kid=True,
+                enable_precision_recall=True,
                 device=device,
                 epoch=epoch + 1,
             ))
-            metric_value = float(getattr(eval_result, config.best_metric))
+            if config.best_metric == "pr_tradeoff":
+                if eval_result.recall < config.pr_recall_floor:
+                    metric_value = float("inf")
+                else:
+                    metric_value = float(eval_result.fid)
+            else:
+                metric_value = float(getattr(eval_result, config.best_metric))
             tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, epoch=epoch + 1)
+            if eval_result.by_seed:
+                for seed, seed_metrics in sorted(eval_result.by_seed.items()):
+                    tracker.log_metrics(
+                        {
+                            f"eval_seed/{seed}/fid": seed_metrics["fid"],
+                            f"eval_seed/{seed}/kid_mean": seed_metrics["kid_mean"],
+                            f"eval_seed/{seed}/kid_std": seed_metrics["kid_std"],
+                        },
+                        epoch=epoch + 1,
+                    )
+            tracker.log_summary({
+                "eval/fid_mean": eval_result.fid,
+                "eval/fid_std": eval_result.fid_std,
+                "eval/fid_best": eval_result.fid_best,
+                "eval/kid_mean": eval_result.kid_mean,
+                "eval/kid_mean_std": eval_result.kid_mean_std,
+                "eval/kid_mean_best": eval_result.kid_mean_best,
+            })
             tracker.log_artifact(config.eval_output_dir / "latest_metrics.json", artifact_path="eval")
             tracker.log_artifact(config.eval_output_dir / "metrics_history.csv", artifact_path="eval")
+            seed_json = config.eval_output_dir / "seed_metrics_latest.json"
+            seed_csv = config.eval_output_dir / "seed_metrics_latest.csv"
+            if seed_json.exists():
+                tracker.log_artifact(seed_json, artifact_path="eval")
+            if seed_csv.exists():
+                tracker.log_artifact(seed_csv, artifact_path="eval")
             if metric_value < best_metric_value:
                 best_metric_value = metric_value
                 save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})

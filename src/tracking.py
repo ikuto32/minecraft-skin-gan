@@ -43,6 +43,8 @@ class Tracker:
             wandb.define_metric("epoch")
             wandb.define_metric("train/*", step_metric="train/step")
             wandb.define_metric("eval/*", step_metric="epoch")
+            wandb.define_metric("eval/precision", step_metric="epoch")
+            wandb.define_metric("eval/recall", step_metric="epoch")
         elif self.backend == "mlflow":
             import mlflow
 

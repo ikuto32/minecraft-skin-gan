@@ -20,6 +20,8 @@ def _summarize_train_config(train_config) -> dict[str, object]:
         "seed",
         "r1_gamma",
         "r1_interval",
+        "r2_gamma",
+        "r2_interval",
         "performance_profile",
         "amp_dtype",
         "ema_beta",

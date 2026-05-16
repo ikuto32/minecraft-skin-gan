@@ -13,6 +13,7 @@ class DiscriminatorLossOutput:
     adv: torch.Tensor
     gp: torch.Tensor
     r1: torch.Tensor
+    r2: torch.Tensor
 
 
 class GanLossStrategy:
@@ -39,7 +40,7 @@ class HingeLossStrategy(GanLossStrategy):
         fake_loss = F.relu(1.0 + d_fake).mean()
         adv = real_loss + fake_loss
         zero = torch.zeros((), device=adv.device, dtype=adv.dtype)
-        return DiscriminatorLossOutput(loss=adv, adv=adv, gp=zero, r1=zero)
+        return DiscriminatorLossOutput(loss=adv, adv=adv, gp=zero, r1=zero, r2=zero)
 
     def generator_loss(self, *, d_fake_for_g: torch.Tensor) -> torch.Tensor:
         return -d_fake_for_g.mean()
@@ -60,22 +61,24 @@ class WganGpLossStrategy(GanLossStrategy):
         gp = ((grads.flatten(1).norm(2, dim=1) - 1.0) ** 2).mean()
         loss = adv + self.gp_lambda * gp
         zero = torch.zeros((), device=adv.device, dtype=adv.dtype)
-        return DiscriminatorLossOutput(loss=loss, adv=adv, gp=gp, r1=zero)
+        return DiscriminatorLossOutput(loss=loss, adv=adv, gp=gp, r1=zero, r2=zero)
 
     def generator_loss(self, *, d_fake_for_g: torch.Tensor) -> torch.Tensor:
         return -d_fake_for_g.mean()
 
 
-class LogisticR1LossStrategy(GanLossStrategy):
-    def __init__(self, r1_gamma: float, r1_interval: int) -> None:
+class LogisticR1R2LossStrategy(GanLossStrategy):
+    def __init__(self, r1_gamma: float, r1_interval: int, r2_gamma: float, r2_interval: int) -> None:
         self.r1_gamma = r1_gamma
         self.r1_interval = r1_interval
+        self.r2_gamma = r2_gamma
+        self.r2_interval = r2_interval
 
     def discriminator_loss(self, *, d_real: torch.Tensor, d_fake: torch.Tensor, real_images: torch.Tensor, fake_images: torch.Tensor, discriminator: torch.nn.Module, step: int) -> DiscriminatorLossOutput:
-        del fake_images
         adv = F.softplus(-d_real).mean() + F.softplus(d_fake).mean()
         zero = torch.zeros((), device=adv.device, dtype=adv.dtype)
         r1 = zero
+        r2 = zero
         loss = adv
         if self.r1_interval > 0 and step % self.r1_interval == 0:
             real_for_r1 = real_images.detach().requires_grad_(True)
@@ -83,15 +86,21 @@ class LogisticR1LossStrategy(GanLossStrategy):
             real_grad = torch.autograd.grad(outputs=d_real_r1.sum(), inputs=real_for_r1, create_graph=True)[0]
             r1 = real_grad.pow(2).flatten(1).sum(1).mean()
             loss = loss + 0.5 * self.r1_gamma * r1
-        return DiscriminatorLossOutput(loss=loss, adv=adv, gp=zero, r1=r1)
+        if self.r2_gamma > 0.0 and self.r2_interval > 0 and step % self.r2_interval == 0:
+            fake_for_r2 = fake_images.detach().requires_grad_(True)
+            d_fake_r2 = discriminator(fake_for_r2)
+            fake_grad = torch.autograd.grad(outputs=d_fake_r2.sum(), inputs=fake_for_r2, create_graph=True)[0]
+            r2 = fake_grad.pow(2).flatten(1).sum(1).mean()
+            loss = loss + 0.5 * self.r2_gamma * r2
+        return DiscriminatorLossOutput(loss=loss, adv=adv, gp=zero, r1=r1, r2=r2)
 
     def generator_loss(self, *, d_fake_for_g: torch.Tensor) -> torch.Tensor:
         return F.softplus(-d_fake_for_g).mean()
 
 
-def build_gan_loss(name: Literal["hinge", "wgan_gp", "logistic_r1"], *, gp_lambda: float, r1_gamma: float, r1_interval: int) -> GanLossStrategy:
+def build_gan_loss(name: Literal["hinge", "wgan_gp", "logistic_r1"], *, gp_lambda: float, r1_gamma: float, r1_interval: int, r2_gamma: float, r2_interval: int) -> GanLossStrategy:
     if name == "hinge":
         return HingeLossStrategy()
     if name == "wgan_gp":
         return WganGpLossStrategy(gp_lambda=gp_lambda)
-    return LogisticR1LossStrategy(r1_gamma=r1_gamma, r1_interval=r1_interval)
+    return LogisticR1R2LossStrategy(r1_gamma=r1_gamma, r1_interval=r1_interval, r2_gamma=r2_gamma, r2_interval=r2_interval)

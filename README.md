@@ -26,6 +26,13 @@ uv run python main.py mode=train \
   tracking.project=minecraft-skin-gan
 ```
 
+`n_critic` を使うと、1イテレーションで Discriminator を複数回更新してから Generator を1回更新できます（例: `n_critic=5`）。
+
+```bash
+uv run python main.py mode=train \
+  n_critic=5
+```
+
 ### TTUR (Two Time-Scale Update Rule)
 
 TTUR（`https://arxiv.org/abs/1706.08500`）に対応しています。  

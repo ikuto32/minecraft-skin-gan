@@ -1,6 +1,6 @@
 # minecraft-skin-gan
 
-64x64 Minecraft skin imagesを使ってDCGANを学習し、FID/KIDで評価するプロジェクトです。
+64x64 Minecraft skin imagesを使ってDCGANを学習し、FID/KID/Precision/Recallで評価するプロジェクトです。
 
 ## Setup
 
@@ -86,8 +86,26 @@ uv run python main.py mode=eval \
   checkpoint=checkpoints/latest.pt \
   real_dir=data/skins \
   output_dir=outputs/eval \
-  sample_count=2048
+sample_count=2048
 ```
+
+必要に応じて高コスト指標をON/OFFできます（`mode=eval`）。
+
+```bash
+uv run python main.py mode=eval enable_fid=true enable_kid=false enable_precision_recall=true
+```
+
+### 指標の解釈（fidelity vs coverage）
+
+- **FID（低いほど良い）**: 生成分布が実データ分布にどれだけ近いかを測る、総合的なfidelity指標。
+- **KID（低いほど良い）**: FIDと同様に分布距離を見るが、サンプル数が少ない場合でも比較的安定しやすい。
+- **Precision（高いほど良い）**: 生成画像の「見た目の正確さ・品質」寄り。高いほど、生成サンプルが実データ多様体の近傍にある割合が高い（fidelity重視）。
+- **Recall（高いほど良い）**: 生成画像の「カバレッジ・多様性」寄り。高いほど、実データ多様体をどれだけ広く覆えているか（coverage重視）。
+
+使い分けの目安:
+- 画質崩れや不自然さを抑えたいとき: **FID/KID + Precision** を重視。
+- モード崩壊（似た出力ばかり）を避けたいとき: **Recall** も必ず確認。
+- 運用では `best_metric=pr_tradeoff` のように「Recall下限を満たす中でFID最小」を使うと、品質と多様性を同時に管理しやすくなります。
 
 ### 再現性を担保した評価（複数seed必須）
 

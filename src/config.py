@@ -99,7 +99,8 @@ class TrainConfig(SchemaModel):
     ada_speed: float = 0.001
     ada_policy: str = "flip,noise,color,translation,cutout"
     checkpoint_dir: Path = Path("checkpoints")
-    best_metric: Literal["fid", "kid_mean"] = "fid"
+    best_metric: Literal["fid", "kid_mean", "pr_tradeoff"] = "fid"
+    pr_recall_floor: float = 0.6
     loss: LossConfig = Field(default_factory=LossConfig)
     tracking: TrackingConfig = Field(default_factory=TrackingConfig)
 
@@ -165,6 +166,9 @@ class EvalConfig(SchemaModel):
     num_workers: int = Field(default=2, ge=0)
     kid_subsets: int = Field(default=50, gt=0)
     kid_subset_size: int = Field(default=32, gt=0)
+    enable_fid: bool = True
+    enable_kid: bool = True
+    enable_precision_recall: bool = True
     device: Literal["cpu", "cuda"] | None = None
     epoch: int | None = None
     resize: int = Field(default=64, gt=0)
@@ -179,6 +183,8 @@ class EvalConfig(SchemaModel):
         _validate_positive("kid_subsets", self.kid_subsets)
         _validate_positive("kid_subset_size", self.kid_subset_size)
         _validate_positive("resize", self.resize)
+        if not (self.enable_fid or self.enable_kid or self.enable_precision_recall):
+            raise ValueError("At least one eval metric must be enabled")
         _validate_non_negative("num_workers", self.num_workers)
         return self
 

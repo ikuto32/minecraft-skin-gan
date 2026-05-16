@@ -98,9 +98,27 @@ class LogisticR1R2LossStrategy(GanLossStrategy):
         return F.softplus(-d_fake_for_g).mean()
 
 
-def build_gan_loss(name: Literal["hinge", "wgan_gp", "logistic_r1"], *, gp_lambda: float, r1_gamma: float, r1_interval: int, r2_gamma: float, r2_interval: int) -> GanLossStrategy:
+class R3GanRelativisticLossStrategy(GanLossStrategy):
+    def __init__(self, rel_scale: float, rel_margin: float) -> None:
+        self.rel_scale = rel_scale
+        self.rel_margin = rel_margin
+
+    def discriminator_loss(self, *, d_real: torch.Tensor, d_fake: torch.Tensor, real_images: torch.Tensor, fake_images: torch.Tensor, discriminator: torch.nn.Module, step: int) -> DiscriminatorLossOutput:
+        del real_images, fake_images, discriminator, step
+        rel = self.rel_scale * (d_real - d_fake - self.rel_margin)
+        adv = F.softplus(-rel).mean()
+        zero = torch.zeros((), device=adv.device, dtype=adv.dtype)
+        return DiscriminatorLossOutput(loss=adv, adv=adv, gp=zero, r1=zero, r2=zero)
+
+    def generator_loss(self, *, d_fake_for_g: torch.Tensor) -> torch.Tensor:
+        return -d_fake_for_g.mean()
+
+
+def build_gan_loss(name: Literal["hinge", "wgan_gp", "logistic_r1", "r3gan_relativistic"], *, gp_lambda: float, r1_gamma: float, r1_interval: int, r2_gamma: float, r2_interval: int, rel_scale: float, rel_margin: float) -> GanLossStrategy:
     if name == "hinge":
         return HingeLossStrategy()
     if name == "wgan_gp":
         return WganGpLossStrategy(gp_lambda=gp_lambda)
+    if name == "r3gan_relativistic":
+        return R3GanRelativisticLossStrategy(rel_scale=rel_scale, rel_margin=rel_margin)
     return LogisticR1R2LossStrategy(r1_gamma=r1_gamma, r1_interval=r1_interval, r2_gamma=r2_gamma, r2_interval=r2_interval)

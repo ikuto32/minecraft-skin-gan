@@ -19,6 +19,8 @@ loss:
   r1_interval: 16
   r2_gamma: 10.0
   r2_interval: 16
+  rel_scale: 1.0
+  rel_margin: 0.0
 compile: false
 channels_last: true
 amp_dtype: bfloat16

@@ -89,6 +89,22 @@ uv run python main.py mode=eval \
   sample_count=2048
 ```
 
+### 再現性を担保した評価（複数seed必須）
+
+- 単一seedのFID/KIDを最終結果として採用しないでください。
+- `eval_seeds` に複数seedを指定し、各seedの結果と平均・標準偏差・最良値を確認してください。
+- 学習時のデフォルトプリセットでは `eval_seeds: [1234, 2024, 3407, 7777]` を使用します。
+
+```bash
+uv run python main.py mode=train \
+  eval_every=1 \
+  eval_seeds='[1234,2024,3407,7777]'
+```
+
+評価出力には以下が追加されます。
+- `outputs/eval/seed_metrics_latest.json`（seed別 + summary）
+- `outputs/eval/seed_metrics_latest.csv`（seed別FID/KID）
+
 
 ## DataLoader worker設定
 

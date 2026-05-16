@@ -375,6 +375,7 @@ def train(config: TrainConfig) -> None:
             save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
 
         if config.eval_every > 0 and (epoch + 1) % config.eval_every == 0:
+            eval_seeds = config.eval_seeds if config.eval_seeds else None
             eval_result = evaluate(EvalConfig(
                 checkpoint=config.checkpoint_dir / "latest.pt",
                 real_dir=config.data_dir,
@@ -384,7 +385,7 @@ def train(config: TrainConfig) -> None:
                 z_dim=config.z_dim,
                 seed=config.eval_seed,
                 model_name=config.model_name,
-                seeds=config.eval_seeds,
+                seeds=eval_seeds,
                 num_workers=config.eval_num_workers,
                 kid_subsets=config.kid_subsets,
                 kid_subset_size=config.kid_subset_size,
@@ -393,8 +394,32 @@ def train(config: TrainConfig) -> None:
             ))
             metric_value = float(getattr(eval_result, config.best_metric))
             tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, epoch=epoch + 1)
+            if eval_result.by_seed:
+                for seed, seed_metrics in sorted(eval_result.by_seed.items()):
+                    tracker.log_metrics(
+                        {
+                            f"eval_seed/{seed}/fid": seed_metrics["fid"],
+                            f"eval_seed/{seed}/kid_mean": seed_metrics["kid_mean"],
+                            f"eval_seed/{seed}/kid_std": seed_metrics["kid_std"],
+                        },
+                        epoch=epoch + 1,
+                    )
+            tracker.log_summary({
+                "eval/fid_mean": eval_result.fid,
+                "eval/fid_std": eval_result.fid_std,
+                "eval/fid_best": eval_result.fid_best,
+                "eval/kid_mean": eval_result.kid_mean,
+                "eval/kid_mean_std": eval_result.kid_mean_std,
+                "eval/kid_mean_best": eval_result.kid_mean_best,
+            })
             tracker.log_artifact(config.eval_output_dir / "latest_metrics.json", artifact_path="eval")
             tracker.log_artifact(config.eval_output_dir / "metrics_history.csv", artifact_path="eval")
+            seed_json = config.eval_output_dir / "seed_metrics_latest.json"
+            seed_csv = config.eval_output_dir / "seed_metrics_latest.csv"
+            if seed_json.exists():
+                tracker.log_artifact(seed_json, artifact_path="eval")
+            if seed_csv.exists():
+                tracker.log_artifact(seed_csv, artifact_path="eval")
             if metric_value < best_metric_value:
                 best_metric_value = metric_value
                 save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})

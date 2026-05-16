@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 from src.config import EvalConfig
-from src.eval_io import EvalResult, append_metrics_history, save_latest_metrics
+from src.eval_io import EvalResult, append_metrics_history, save_latest_metrics, save_seed_metrics
 from src.eval_metrics import compute_metrics
 from src.eval_plot import plot_metrics
 from src.models import resolve_model
@@ -137,9 +137,11 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
         sample_count=cfg.sample_count,
         seed=seeds[0],
         seeds=seeds,
+        by_seed=metrics_by_seed,
     )
 
     save_latest_metrics(result, cfg.output_dir)
+    save_seed_metrics(result, cfg.output_dir)
     history_path = append_metrics_history(result, cfg.output_dir)
     plot_metrics(history_path, cfg.output_dir / "metrics.png")
     print(json.dumps({"summary": result.__dict__, "by_seed": metrics_by_seed}, indent=2))

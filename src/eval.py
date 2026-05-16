@@ -155,18 +155,56 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     kid_mean_values: list[float] = []
     kid_std_values: list[float] = []
 
+    retried_without_cache = False
     for seed in seeds:
         random.seed(seed)
         torch.manual_seed(seed)
         seed_cfg = EvalConfig(**(cfg.__dict__ | {"seed": seed, "seeds": None}))
-        metric_values = compute_metrics(
-            cfg=seed_cfg,
-            loader=loader,
-            generator=generator,
-            device=device,
-            real_features_state=real_metrics_state,
-            cache_real_only=False,
-        )
+        try:
+            metric_values = compute_metrics(
+                cfg=seed_cfg,
+                loader=loader,
+                generator=generator,
+                device=device,
+                real_features_state=real_metrics_state,
+                cache_real_only=False,
+            )
+        except ValueError as exc:
+            if (not retried_without_cache) and "Need at least 2 real samples to compute FID" in str(exc):
+                retried_without_cache = True
+                real_metrics_state = compute_metrics(
+                    cfg=cfg,
+                    loader=loader,
+                    generator=generator,
+                    device=device,
+                    real_features_state=None,
+                    cache_real_only=True,
+                )
+                if cfg.reuse_real_features:
+                    torch.save(
+                        {
+                            "meta": {
+                                "cache_version": REAL_FEATURES_CACHE_VERSION,
+                                "dataset_fingerprint": dataset_fingerprint,
+                                "sample_count": cfg.sample_count,
+                                "resize": cfg.resize,
+                                "color_mode": cfg.color_mode,
+                            },
+                            "fid_state": real_metrics_state["fid_state"],
+                            "kid_state": real_metrics_state["kid_state"],
+                        },
+                        real_features_cache_path,
+                    )
+                metric_values = compute_metrics(
+                    cfg=seed_cfg,
+                    loader=loader,
+                    generator=generator,
+                    device=device,
+                    real_features_state=real_metrics_state,
+                    cache_real_only=False,
+                )
+            else:
+                raise
         fid_values.append(metric_values.fid)
         kid_mean_values.append(metric_values.kid_mean)
         kid_std_values.append(metric_values.kid_std)

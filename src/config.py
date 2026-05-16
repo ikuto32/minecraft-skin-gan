@@ -62,6 +62,8 @@ class TrainConfig(SchemaModel):
     batch_size: int = Field(default=64, gt=0)
     z_dim: int = Field(default=100, gt=0)
     lr: float = 2e-4
+    lr_g: float | None = None
+    lr_d: float | None = None
     resume: Path | None = None
     auto_resume: bool = True
     seed: int = 42
@@ -123,6 +125,12 @@ class TrainConfig(SchemaModel):
             raise ValueError(
                 "amp_dtype=float16 is not allowed with performance_profile=safe"
             )
+        if self.lr_g is None:
+            self.lr_g = self.lr
+        if self.lr_d is None:
+            self.lr_d = self.lr
+        if self.lr_g <= 0 or self.lr_d <= 0:
+            raise ValueError("lr_g and lr_d must be > 0")
         return self
 
 

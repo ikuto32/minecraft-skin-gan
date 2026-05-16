@@ -26,6 +26,19 @@ uv run python main.py mode=train \
   tracking.project=minecraft-skin-gan
 ```
 
+### TTUR (Two Time-Scale Update Rule)
+
+TTUR（`https://arxiv.org/abs/1706.08500`）に対応しています。  
+`lr_g`（Generator）と `lr_d`（Discriminator）を個別に設定できます。
+
+```bash
+uv run python main.py mode=train \
+  lr_g=0.0001 \
+  lr_d=0.0004
+```
+
+`lr_g` / `lr_d` を省略した場合は、従来どおり `lr` の値が両方に適用されます。
+
 ### パフォーマンスプロファイル
 
 - `performance_profile=auto`（推奨）: 実行時に `device` / GPU世代（compute capability）/ PyTorch runtime capability を見て、`compile`・`amp_dtype`・`channels_last` を自動選択します。

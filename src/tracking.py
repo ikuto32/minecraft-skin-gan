@@ -11,6 +11,33 @@ import torch
 from src.config import TrackingConfig
 
 
+def build_gan_diagnostics_payload(
+    *,
+    d_real_mean: float,
+    d_real_var: float,
+    d_fake_mean: float,
+    d_fake_var: float,
+    grad_norm_g: float,
+    grad_norm_d: float,
+    update_norm_g: float,
+    update_norm_d: float,
+    update_ratio_g_over_d: float,
+) -> dict[str, float]:
+    """Build a backend-agnostic diagnostics payload using unified metric keys."""
+
+    return {
+        "diag/d_real_mean": d_real_mean,
+        "diag/d_real_var": d_real_var,
+        "diag/d_fake_mean": d_fake_mean,
+        "diag/d_fake_var": d_fake_var,
+        "diag/grad_norm_g": grad_norm_g,
+        "diag/grad_norm_d": grad_norm_d,
+        "diag/update_norm_g": update_norm_g,
+        "diag/update_norm_d": update_norm_d,
+        "diag/update_ratio_g_over_d": update_ratio_g_over_d,
+    }
+
+
 class Tracker:
     def __init__(
         self,

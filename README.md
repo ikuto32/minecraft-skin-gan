@@ -61,6 +61,19 @@ uv run python main.py mode=train performance_profile=safe
 
 ## 追跡（W&B / MLflow）
 
+### 異常時にまず見るメトリクス（運用ガイド）
+
+学習が不安定なときは、まず以下の診断キーを確認してください（W&B / MLflowで同一キー）。
+
+- `diag/d_real_mean`, `diag/d_fake_mean`, `diag/d_real_var`, `diag/d_fake_var`
+  - Dが飽和すると `d_real_mean` が高止まり、`d_fake_mean` が極端に低下しやすい。
+- `diag/grad_norm_g`, `diag/grad_norm_d`
+  - 急激なスパイク（例: `1e3`超）は勾配爆発の兆候。
+- `diag/update_norm_g`, `diag/update_norm_d`, `diag/update_ratio_g_over_d`
+  - 更新量比 `|Δθ_G|/|Δθ_D|` が長く極端（過小/過大）なら、学習率バランス崩れを疑う。
+
+ランタイムでは軽量ガードとして、`NaN/Inf`、勾配爆発疑い、D飽和疑いを検出した際に warning を出力します。
+
 ### W&B
 
 ```bash

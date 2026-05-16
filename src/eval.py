@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import random
-import hashlib
 from pathlib import Path
 
 import torch
@@ -16,8 +15,6 @@ from src.eval_io import EvalResult, append_metrics_history, save_latest_metrics
 from src.eval_metrics import compute_metrics
 from src.eval_plot import plot_metrics
 from src.models import resolve_model
-
-REAL_FEATURES_CACHE_VERSION = 2
 
 
 class RealImageDataset(Dataset):
@@ -42,38 +39,36 @@ class RealImageDataset(Dataset):
         return self.transform(image)
 
 
-def _real_features_cache_path(cfg: EvalConfig) -> Path:
-    dataset_fingerprint = _dataset_fingerprint(cfg.real_dir)
-    cache_key = {
-        "fingerprint": dataset_fingerprint,
-        "resize": cfg.resize,
-        "color_mode": cfg.color_mode,
-        "sample_count": cfg.sample_count,
-    }
-    digest = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-    return cfg.output_dir / "cache" / f"real_features_{digest}.pt"
-
-
-def _dataset_fingerprint(real_dir: Path) -> str:
-    entries: list[dict[str, int | str]] = []
-    for path in sorted(p for p in real_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}):
-        stat = path.stat()
-        entries.append({
-            "path": str(path.resolve()),
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-        })
-    if not entries:
-        raise ValueError(f"No images found in {real_dir}")
-    return hashlib.sha256(json.dumps(entries, sort_keys=True).encode("utf-8")).hexdigest()
-
-
 def _seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     random.seed(worker_seed)
     torch.manual_seed(worker_seed)
 
-    
+
+def _build_loader(cfg: EvalConfig, dataset: Dataset, device: str) -> DataLoader:
+    dataloader_gen = torch.Generator()
+    dataloader_gen.manual_seed(cfg.seed)
+    return DataLoader(
+        dataset,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=(device == "cuda"),
+        worker_init_fn=_seed_worker,
+        generator=dataloader_gen,
+    )
+
+
+def _mean(values: list[float]) -> float:
+    return float(sum(values) / len(values))
+
+
+def _std(values: list[float], mean: float) -> float:
+    if len(values) <= 1:
+        return 0.0
+    return float(math.sqrt(sum((v - mean) ** 2 for v in values) / len(values)))
+
+
 def evaluate(cfg: EvalConfig) -> EvalResult:
     device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")
     random.seed(cfg.seed)
@@ -90,17 +85,7 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     if cfg.sample_count > len(dataset):
         raise ValueError(f"sample_count ({cfg.sample_count}) must be <= number of real images ({len(dataset)})")
 
-    dataloader_gen = torch.Generator()
-    dataloader_gen.manual_seed(cfg.seed)
-    loader = DataLoader(
-        dataset,
-        batch_size=cfg.batch_size,
-        shuffle=False,
-        num_workers=cfg.num_workers,
-        pin_memory=(device == "cuda"),
-        worker_init_fn=_seed_worker,
-        generator=dataloader_gen,
-    )
+    loader = _build_loader(cfg, dataset, device)
 
     model_spec = resolve_model(cfg.model_name)
     generator = model_spec.generator_cls(z_dim=cfg.z_dim, **model_spec.generator_hparams).to(device)
@@ -109,94 +94,22 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
     generator.eval()
 
     seeds = cfg.seeds or [cfg.seed]
-
-    dataset_fingerprint = _dataset_fingerprint(cfg.real_dir)
-    real_features_cache_path = _real_features_cache_path(cfg)
-    real_metrics_state = None
-    if cfg.reuse_real_features and real_features_cache_path.exists():
-        cached = torch.load(real_features_cache_path, map_location="cpu")
-        expected_meta = {
-            "cache_version": REAL_FEATURES_CACHE_VERSION,
-            "dataset_fingerprint": dataset_fingerprint,
-            "sample_count": cfg.sample_count,
-            "resize": cfg.resize,
-            "color_mode": cfg.color_mode,
-        }
-        if cached.get("meta") == expected_meta:
-            real_metrics_state = cached
-
-    if real_metrics_state is None:
-        real_features_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        real_metrics_state = compute_metrics(
-            cfg=cfg,
-            loader=loader,
-            generator=generator,
-            device=device,
-        )
-        if cfg.reuse_real_features:
-            torch.save(
-                {
-                    "meta": {
-                        "cache_version": REAL_FEATURES_CACHE_VERSION,
-                        "dataset_fingerprint": dataset_fingerprint,
-                        "sample_count": cfg.sample_count,
-                        "resize": cfg.resize,
-                        "color_mode": cfg.color_mode,
-                    },
-                    "fid_state": real_metrics_state["fid_state"],
-                    "kid_state": real_metrics_state["kid_state"],
-                },
-                real_features_cache_path,
-            )
     metrics_by_seed: dict[int, dict[str, float]] = {}
     fid_values: list[float] = []
     kid_mean_values: list[float] = []
     kid_std_values: list[float] = []
 
-    retried_without_cache = False
     for seed in seeds:
         random.seed(seed)
         torch.manual_seed(seed)
         seed_cfg = EvalConfig(**(cfg.__dict__ | {"seed": seed, "seeds": None}))
-        try:
-            metric_values = compute_metrics(
-                cfg=seed_cfg,
-                loader=loader,
-                generator=generator,
-                device=device,
-            )
-        except ValueError as exc:
-            if (not retried_without_cache) and "Need at least 2 real samples to compute FID" in str(exc):
-                retried_without_cache = True
-                real_metrics_state = compute_metrics(
-                    cfg=cfg,
-                    loader=loader,
-                    generator=generator,
-                    device=device,
-                )
-                if cfg.reuse_real_features:
-                    torch.save(
-                        {
-                            "meta": {
-                                "cache_version": REAL_FEATURES_CACHE_VERSION,
-                                "dataset_fingerprint": dataset_fingerprint,
-                                "sample_count": cfg.sample_count,
-                                "resize": cfg.resize,
-                                "color_mode": cfg.color_mode,
-                            },
-                            "fid_state": real_metrics_state["fid_state"],
-                            "kid_state": real_metrics_state["kid_state"],
-                        },
-                        real_features_cache_path,
-                    )
-                metric_values = compute_metrics(
-                    cfg=seed_cfg,
-                    loader=loader,
-                    generator=generator,
-                    device=device,
-                )
-            else:
-                raise
+        metric_values = compute_metrics(
+            cfg=seed_cfg,
+            loader=loader,
+            generator=generator,
+            device=device,
+        )
+
         fid_values.append(metric_values.fid)
         kid_mean_values.append(metric_values.kid_mean)
         kid_std_values.append(metric_values.kid_std)
@@ -205,14 +118,6 @@ def evaluate(cfg: EvalConfig) -> EvalResult:
             "kid_mean": metric_values.kid_mean,
             "kid_std": metric_values.kid_std,
         }
-
-    def _mean(values: list[float]) -> float:
-        return float(sum(values) / len(values))
-
-    def _std(values: list[float], mean: float) -> float:
-        if len(values) <= 1:
-            return 0.0
-        return float(math.sqrt(sum((v - mean) ** 2 for v in values) / len(values)))
 
     fid_mean = _mean(fid_values)
     kid_mean_mean = _mean(kid_mean_values)

@@ -145,8 +145,6 @@ class EvalConfig(SchemaModel):
     epoch: int | None = None
     resize: int = Field(default=64, gt=0)
     color_mode: Literal["RGB", "RGBA"] = "RGBA"
-    reuse_real_features: bool = True
-
 
     @model_validator(mode="after")
     def _validate_runtime_constraints(self) -> "EvalConfig":

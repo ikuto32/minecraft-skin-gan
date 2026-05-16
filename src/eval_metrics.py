@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import torch
 from torch.utils.data import DataLoader
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.kid import KernelInceptionDistance
 from torch_fidelity import calculate_metrics
+from torchvision.utils import save_image
 
 from src.config import EvalConfig
 import torch.nn as nn
@@ -99,20 +102,28 @@ def compute_metrics(
                 kid_mean_value = float(kid_mean.item())
                 kid_std_value = float(kid_std.item())
             if cfg.enable_precision_recall:
-                pr_metrics = calculate_metrics(
-                    input1=str(cfg.real_dir),
-                    input2=generator,
-                    input2_model_num_samples=cfg.sample_count,
-                    input2_model_z_size=cfg.z_dim,
-                    cuda=device == "cuda",
-                    isc=False,
-                    fid=False,
-                    kid=False,
-                    prc=True,
-                    verbose=False,
-                )
-                precision_value = float(pr_metrics["precision"])
-                recall_value = float(pr_metrics["recall"])
+                with TemporaryDirectory(prefix="eval_fake_samples_") as temp_dir:
+                    fake_dir = Path(temp_dir)
+                    _export_generated_samples(
+                        cfg=cfg,
+                        loader=loader,
+                        generator=generator,
+                        output_dir=fake_dir,
+                        sample_count=cfg.sample_count,
+                        device=device,
+                    )
+                    pr_metrics = calculate_metrics(
+                        input1=str(cfg.real_dir),
+                        input2=str(fake_dir),
+                        cuda=device == "cuda",
+                        isc=False,
+                        fid=False,
+                        kid=False,
+                        prc=True,
+                        verbose=False,
+                    )
+                    precision_value = float(pr_metrics["precision"])
+                    recall_value = float(pr_metrics["recall"])
 
             return EvalMetricsResult(
                 fid=fid_value,
@@ -202,6 +213,35 @@ def _update_fake_metrics(
 
             seen += take
             progress.update(take)
+
+    return seen
+
+
+def _export_generated_samples(
+    *,
+    cfg: EvalConfig,
+    loader: DataLoader,
+    generator: nn.Module,
+    output_dir: Path,
+    sample_count: int,
+    device: str,
+) -> int:
+    seen = 0
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for real in loader:
+        if seen >= sample_count:
+            break
+
+        take = min(sample_count - seen, real.size(0))
+        noise = torch.randn(take, cfg.z_dim, 1, 1, device=device)
+        fake = generate_fake_batch(generator, noise).clamp(0, 1).cpu()
+
+        for index_in_batch in range(take):
+            image_path = output_dir / f"fake_{seen + index_in_batch:07d}.png"
+            save_image(fake[index_in_batch], image_path)
+
+        seen += take
 
     return seen
 

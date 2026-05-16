@@ -389,10 +389,19 @@ def train(config: TrainConfig) -> None:
                 num_workers=config.eval_num_workers,
                 kid_subsets=config.kid_subsets,
                 kid_subset_size=config.kid_subset_size,
+                enable_fid=True,
+                enable_kid=True,
+                enable_precision_recall=True,
                 device=device,
                 epoch=epoch + 1,
             ))
-            metric_value = float(getattr(eval_result, config.best_metric))
+            if config.best_metric == "pr_tradeoff":
+                if eval_result.recall < config.pr_recall_floor:
+                    metric_value = float("inf")
+                else:
+                    metric_value = float(eval_result.fid)
+            else:
+                metric_value = float(getattr(eval_result, config.best_metric))
             tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, epoch=epoch + 1)
             if eval_result.by_seed:
                 for seed, seed_metrics in sorted(eval_result.by_seed.items()):

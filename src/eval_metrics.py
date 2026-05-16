@@ -6,6 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.kid import KernelInceptionDistance
+from torch_fidelity import calculate_metrics
 
 from src.config import EvalConfig
 import torch.nn as nn
@@ -14,9 +15,11 @@ from tqdm import tqdm
 
 @dataclass(frozen=True)
 class EvalMetricsResult:
-    fid: float
-    kid_mean: float
-    kid_std: float
+    fid: float | None = None
+    kid_mean: float | None = None
+    kid_std: float | None = None
+    precision: float | None = None
+    recall: float | None = None
 
 
 def to_uint8_rgb(batch: torch.Tensor) -> torch.Tensor:
@@ -48,17 +51,10 @@ def compute_metrics(
     generator: nn.Module,
     device: str,
 ) -> EvalMetricsResult:
-    fid = FrechetInceptionDistance(
-        feature=2048,
-        normalize=False,
-    ).to(device)
-
+    fid = FrechetInceptionDistance(feature=2048, normalize=False).to(device) if cfg.enable_fid else None
     kid = KernelInceptionDistance(
-        subset_size=cfg.kid_subset_size,
-        subsets=cfg.kid_subsets,
-        feature=2048,
-        normalize=False,
-    ).to(device)
+        subset_size=cfg.kid_subset_size, subsets=cfg.kid_subsets, feature=2048, normalize=False
+    ).to(device) if cfg.enable_kid else None
 
     was_training = generator.training
     generator.eval()
@@ -72,9 +68,9 @@ def compute_metrics(
                 sample_count=cfg.sample_count,
                 device=device,
             )
-            if real_seen < 2:
+            if real_seen < 2 and (cfg.enable_fid or cfg.enable_kid or cfg.enable_precision_recall):
                 raise ValueError(
-                    "Need at least 2 real samples to compute FID/KID metrics"
+                    "Need at least 2 real samples to compute enabled metrics"
                 )
 
             fake_seen = _update_fake_metrics(
@@ -86,20 +82,44 @@ def compute_metrics(
                 sample_count=cfg.sample_count,
                 device=device,
             )
-            if fake_seen < 2:
+            if fake_seen < 2 and (cfg.enable_fid or cfg.enable_kid or cfg.enable_precision_recall):
                 raise ValueError(
-                    "Need at least 2 generated samples to compute FID/KID metrics"
+                    "Need at least 2 generated samples to compute enabled metrics"
                 )
-
-            _validate_fid_sample_counts(fid)
-
-            fid_value = _compute_fid_value(fid)
-            kid_mean, kid_std = kid.compute()
+            fid_value: float | None = None
+            kid_mean_value: float | None = None
+            kid_std_value: float | None = None
+            precision_value: float | None = None
+            recall_value: float | None = None
+            if fid is not None:
+                _validate_fid_sample_counts(fid)
+                fid_value = _compute_fid_value(fid)
+            if kid is not None:
+                kid_mean, kid_std = kid.compute()
+                kid_mean_value = float(kid_mean.item())
+                kid_std_value = float(kid_std.item())
+            if cfg.enable_precision_recall:
+                pr_metrics = calculate_metrics(
+                    input1=str(cfg.real_dir),
+                    input2=generator,
+                    input2_model_num_samples=cfg.sample_count,
+                    input2_model_z_size=cfg.z_dim,
+                    cuda=device == "cuda",
+                    isc=False,
+                    fid=False,
+                    kid=False,
+                    prc=True,
+                    verbose=False,
+                )
+                precision_value = float(pr_metrics["precision"])
+                recall_value = float(pr_metrics["recall"])
 
             return EvalMetricsResult(
                 fid=fid_value,
-                kid_mean=float(kid_mean.item()),
-                kid_std=float(kid_std.item()),
+                kid_mean=kid_mean_value,
+                kid_std=kid_std_value,
+                precision=precision_value,
+                recall=recall_value,
             )
 
     finally:
@@ -109,8 +129,8 @@ def compute_metrics(
 def _update_real_metrics(
     *,
     loader: DataLoader,
-    fid: FrechetInceptionDistance,
-    kid: KernelInceptionDistance,
+    fid: FrechetInceptionDistance | None,
+    kid: KernelInceptionDistance | None,
     sample_count: int,
     device: str,
 ) -> int:
@@ -130,8 +150,10 @@ def _update_real_metrics(
             real = real[:take].to(device, non_blocking=True)
 
             real_u8 = to_uint8_rgb(real)
-            fid.update(real_u8, real=True)
-            kid.update(real_u8, real=True)
+            if fid is not None:
+                fid.update(real_u8, real=True)
+            if kid is not None:
+                kid.update(real_u8, real=True)
 
             seen += take
             progress.update(take)
@@ -144,8 +166,8 @@ def _update_fake_metrics(
     cfg: EvalConfig,
     loader: DataLoader,
     generator: nn.Module,
-    fid: FrechetInceptionDistance,
-    kid: KernelInceptionDistance,
+    fid: FrechetInceptionDistance | None,
+    kid: KernelInceptionDistance | None,
     sample_count: int,
     device: str,
 ) -> int:
@@ -173,8 +195,10 @@ def _update_fake_metrics(
             fake = generate_fake_batch(generator, noise)
 
             fake_u8 = to_uint8_rgb(fake)
-            fid.update(fake_u8, real=False)
-            kid.update(fake_u8, real=False)
+            if fid is not None:
+                fid.update(fake_u8, real=False)
+            if kid is not None:
+                kid.update(fake_u8, real=False)
 
             seen += take
             progress.update(take)

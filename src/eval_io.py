@@ -20,6 +20,14 @@ class EvalResult:
     kid_mean_std: float = 0.0
     kid_mean_best: float = 0.0
     kid_mean_worst: float = 0.0
+    precision: float = 0.0
+    precision_std: float = 0.0
+    precision_best: float = 0.0
+    precision_worst: float = 0.0
+    recall: float = 0.0
+    recall_std: float = 0.0
+    recall_best: float = 0.0
+    recall_worst: float = 0.0
     seeds: list[int] | None = None
     by_seed: dict[int, dict[str, float]] | None = None
 
@@ -51,6 +59,14 @@ def append_metrics_history(result: EvalResult, output_dir: Path) -> Path:
                 "sample_count",
                 "seed",
                 "seeds",
+                "precision",
+                "precision_std",
+                "precision_best",
+                "precision_worst",
+                "recall",
+                "recall_std",
+                "recall_best",
+                "recall_worst",
             ],
         )
         if write_header:
@@ -79,6 +95,14 @@ def save_seed_metrics(result: EvalResult, output_dir: Path) -> tuple[Path, Path]
                     "kid_mean_std": result.kid_mean_std,
                     "kid_mean_best": result.kid_mean_best,
                     "kid_mean_worst": result.kid_mean_worst,
+                    "precision": result.precision,
+                    "precision_std": result.precision_std,
+                    "precision_best": result.precision_best,
+                    "precision_worst": result.precision_worst,
+                    "recall": result.recall,
+                    "recall_std": result.recall_std,
+                    "recall_best": result.recall_best,
+                    "recall_worst": result.recall_worst,
                 },
                 "by_seed": result.by_seed,
             },
@@ -88,7 +112,7 @@ def save_seed_metrics(result: EvalResult, output_dir: Path) -> tuple[Path, Path]
 
     csv_path = output_dir / "seed_metrics_latest.csv"
     with csv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["epoch", "seed", "fid", "kid_mean", "kid_std"])
+        writer = csv.DictWriter(f, fieldnames=["epoch", "seed", "fid", "kid_mean", "kid_std", "precision", "recall"])
         writer.writeheader()
         for seed, values in sorted(result.by_seed.items()):
             writer.writerow({
@@ -97,5 +121,7 @@ def save_seed_metrics(result: EvalResult, output_dir: Path) -> tuple[Path, Path]
                 "fid": values["fid"],
                 "kid_mean": values["kid_mean"],
                 "kid_std": values["kid_std"],
+                "precision": values.get("precision", ""),
+                "recall": values.get("recall", ""),
             })
     return json_path, csv_path

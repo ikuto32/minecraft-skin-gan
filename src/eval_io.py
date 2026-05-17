@@ -65,8 +65,10 @@ def append_metrics_history(result: EvalResult, output_dir: Path) -> Path:
                 "recall_std",
                 "recall_best",
                 "recall_worst",
-            ]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        ]
+
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        
         if write_header:
             writer.writeheader()
         row = asdict(result)

@@ -10,6 +10,7 @@ from src.models.dcgan import (
     ResNetDiscriminator64,
     ResConvGenerator,
 )
+from src.models.r3gan import R3GANDiscriminator, R3GANGenerator
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,28 @@ class ModelSpec:
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
+    "r3gan": ModelSpec(
+        generator_cls=R3GANGenerator,
+        discriminator_cls=R3GANDiscriminator,
+        generator_hparams={
+            "channels": 4,
+            "WidthPerStage": [512, 384, 256, 192, 128],
+            "CardinalityPerStage": [1, 1, 1, 1, 1],
+            "BlocksPerStage": [2, 2, 2, 2, 2],
+            "ExpansionFactor": 2,
+            "KernelSize": 3,
+            "ResamplingFilter": [1, 2, 1],
+        },
+        discriminator_hparams={
+            "channels": 4,
+            "WidthPerStage": [128, 192, 256, 384, 512],
+            "CardinalityPerStage": [1, 1, 1, 1, 1],
+            "BlocksPerStage": [2, 2, 2, 2, 2],
+            "ExpansionFactor": 2,
+            "KernelSize": 3,
+            "ResamplingFilter": [1, 2, 1],
+        },
+    ),
     "dcgan_baseline": ModelSpec(
         generator_cls=DCGANGenerator,
         discriminator_cls=DCGANDiscriminator,

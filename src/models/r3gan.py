@@ -255,6 +255,7 @@ class Generator(nn.Module):
         ConditionEmbeddingDimension=0,
         KernelSize=3,
         ResamplingFilter=[1, 2, 1],
+        ImageChannels=3,
     ):
         super(Generator, self).__init__()
 
@@ -285,7 +286,7 @@ class Generator(nn.Module):
         ]
 
         self.MainLayers = nn.ModuleList(MainLayers)
-        self.AggregationLayer = Convolution(WidthPerStage[-1], 3, KernelSize=1)
+        self.AggregationLayer = Convolution(WidthPerStage[-1], ImageChannels, KernelSize=1)
 
         if ConditionDimension is not None:
             self.EmbeddingLayer = MSRInitializer(
@@ -316,6 +317,7 @@ class Discriminator(nn.Module):
         ConditionEmbeddingDimension=0,
         KernelSize=3,
         ResamplingFilter=[1, 2, 1],
+        ImageChannels=3,
     ):
         super(Discriminator, self).__init__()
 
@@ -345,7 +347,7 @@ class Discriminator(nn.Module):
             )
         ]
 
-        self.ExtractionLayer = Convolution(3, WidthPerStage[0], KernelSize=1)
+        self.ExtractionLayer = Convolution(ImageChannels, WidthPerStage[0], KernelSize=1)
         self.MainLayers = nn.ModuleList(MainLayers)
 
         if ConditionDimension is not None:
@@ -367,3 +369,18 @@ class Discriminator(nn.Module):
         )
 
         return x.view(x.shape[0])
+
+
+class R3GANGenerator(Generator):
+    def __init__(self, z_dim: int, channels: int = 4, **kwargs):
+        super().__init__(NoiseDimension=z_dim, ImageChannels=channels, **kwargs)
+
+    def forward(self, x, y=None):
+        if x.ndim == 4:
+            x = x.view(x.shape[0], x.shape[1])
+        return super().forward(x, y)
+
+
+class R3GANDiscriminator(Discriminator):
+    def __init__(self, channels: int = 4, **kwargs):
+        super().__init__(ImageChannels=channels, **kwargs)

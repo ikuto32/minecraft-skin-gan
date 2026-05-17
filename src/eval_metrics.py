@@ -77,6 +77,7 @@ def compute_metrics(
                 kid=kid,
                 sample_count=cfg.sample_count,
                 device=device,
+                metric_color_mode=cfg.metric_color_mode,
             )
             if real_seen < 2 and (cfg.enable_fid or cfg.enable_kid or cfg.enable_precision_recall):
                 raise ValueError(
@@ -91,6 +92,7 @@ def compute_metrics(
                 kid=kid,
                 sample_count=cfg.sample_count,
                 device=device,
+                metric_color_mode=cfg.metric_color_mode,
             )
             if fake_seen < 2 and (cfg.enable_fid or cfg.enable_kid or cfg.enable_precision_recall):
                 raise ValueError(
@@ -162,6 +164,7 @@ def _update_real_metrics(
     kid: KernelInceptionDistance | None,
     sample_count: int,
     device: str,
+    metric_color_mode: str,
 ) -> int:
     seen = 0
 
@@ -178,7 +181,7 @@ def _update_real_metrics(
             take = min(sample_count - seen, real.size(0))
             real = real[:take].to(device, non_blocking=True)
 
-            real_u8 = to_uint8_rgb(real, metric_color_mode=cfg.metric_color_mode)
+            real_u8 = to_uint8_rgb(real, metric_color_mode=metric_color_mode)
             if fid is not None:
                 fid.update(real_u8, real=True)
             if kid is not None:
@@ -199,6 +202,7 @@ def _update_fake_metrics(
     kid: KernelInceptionDistance | None,
     sample_count: int,
     device: str,
+    metric_color_mode: str,
 ) -> int:
     seen = 0
 
@@ -223,7 +227,7 @@ def _update_fake_metrics(
             )
             fake = generate_fake_batch(generator, noise)
 
-            fake_u8 = to_uint8_rgb(fake, metric_color_mode=cfg.metric_color_mode)
+            fake_u8 = to_uint8_rgb(fake, metric_color_mode=metric_color_mode)
             if fid is not None:
                 fid.update(fake_u8, real=False)
             if kid is not None:

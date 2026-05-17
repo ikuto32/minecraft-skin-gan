@@ -92,6 +92,9 @@ class TrainConfig(SchemaModel):
     eval_output_dir: Path = Path("outputs/eval")
     kid_subsets: int = Field(default=50, gt=0)
     kid_subset_size: int = Field(default=32, gt=0)
+    eval_enable_fid: bool = True
+    eval_enable_kid: bool = True
+    eval_enable_precision_recall: bool = True
     ema_beta: float = 0.999
     use_ada: bool = False
     ada_target: float = 0.6
@@ -119,6 +122,8 @@ class TrainConfig(SchemaModel):
         _validate_positive("eval_batch_size", self.eval_batch_size)
         _validate_positive("kid_subsets", self.kid_subsets)
         _validate_positive("kid_subset_size", self.kid_subset_size)
+        if not (self.eval_enable_fid or self.eval_enable_kid or self.eval_enable_precision_recall):
+            raise ValueError("At least one eval metric must be enabled for periodic eval")
         _validate_positive("ada_interval", self.ada_interval)
         if not 0.0 <= self.ada_target <= 1.0:
             raise ValueError("ada_target must be within [0, 1]")

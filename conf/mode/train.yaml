@@ -37,6 +37,9 @@ eval_num_workers: 1
 eval_output_dir: outputs/eval
 kid_subsets: 50
 kid_subset_size: 32
+eval_enable_fid: true
+eval_enable_kid: true
+eval_enable_precision_recall: true
 ema_beta: 0.999
 use_ada: true
 ada_target: 0.6

@@ -483,9 +483,9 @@ def train(config: TrainConfig) -> None:
                 num_workers=config.eval_num_workers,
                 kid_subsets=config.kid_subsets,
                 kid_subset_size=config.kid_subset_size,
-                enable_fid=True,
-                enable_kid=True,
-                enable_precision_recall=True,
+                enable_fid=config.eval_enable_fid,
+                enable_kid=config.eval_enable_kid,
+                enable_precision_recall=config.eval_enable_precision_recall,
                 device=device,
                 epoch=epoch + 1,
             ))

@@ -43,9 +43,7 @@ def append_metrics_history(result: EvalResult, output_dir: Path) -> Path:
     history_path = output_dir / "metrics_history.csv"
     write_header = not history_path.exists()
     with history_path.open("a", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
+        fieldnames = [
                 "epoch",
                 "fid",
                 "fid_std",
@@ -67,14 +65,15 @@ def append_metrics_history(result: EvalResult, output_dir: Path) -> Path:
                 "recall_std",
                 "recall_best",
                 "recall_worst",
-            ],
-            extrasaction="ignore",
-        )
+        ]
+
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        
         if write_header:
             writer.writeheader()
         row = asdict(result)
         row["seeds"] = ",".join(str(s) for s in (result.seeds or [result.seed]))
-        writer.writerow(row)
+        writer.writerow({k: row.get(k, "") for k in fieldnames})
     return history_path
 
 

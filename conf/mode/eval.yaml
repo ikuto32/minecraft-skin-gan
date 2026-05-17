@@ -1,4 +1,4 @@
-model_name: dcgan_baseline
+model_name: r3gan
 mode: eval
 checkpoint: checkpoints/latest.pt
 real_dir: data/skins

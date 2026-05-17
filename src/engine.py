@@ -499,14 +499,15 @@ def train(config: TrainConfig) -> None:
             tracker.log_metrics({f"eval/{k}": float(v) for k, v in eval_result.__dict__.items() if isinstance(v, (int, float))}, epoch=epoch + 1)
             if eval_result.by_seed:
                 for seed, seed_metrics in sorted(eval_result.by_seed.items()):
-                    tracker.log_metrics(
-                        {
-                            f"eval_seed/{seed}/fid": seed_metrics["fid"],
-                            f"eval_seed/{seed}/kid_mean": seed_metrics["kid_mean"],
-                            f"eval_seed/{seed}/kid_std": seed_metrics["kid_std"],
-                        },
-                        epoch=epoch + 1,
-                    )
+                    payload: dict[str, float] = {}
+                    if "fid" in seed_metrics:
+                        payload[f"eval_seed/{seed}/fid"] = seed_metrics["fid"]
+                    if "kid_mean" in seed_metrics:
+                        payload[f"eval_seed/{seed}/kid_mean"] = seed_metrics["kid_mean"]
+                    if "kid_std" in seed_metrics:
+                        payload[f"eval_seed/{seed}/kid_std"] = seed_metrics["kid_std"]
+                    if payload:
+                        tracker.log_metrics(payload, epoch=epoch + 1)
             tracker.log_summary({
                 "eval/fid_mean": eval_result.fid,
                 "eval/fid_std": eval_result.fid_std,

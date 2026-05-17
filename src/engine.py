@@ -435,12 +435,6 @@ def train(config: TrainConfig) -> None:
                     f"grad_norm_g={g_grad_norm:.3e}, grad_norm_d={d_grad_norm:.3e}",
                     stacklevel=2,
                 )
-            if d_real_mean > 0.95 and d_fake_mean < 0.05:
-                warnings.warn(
-                    f"[train-guard] discriminator saturation suspected at step={global_step}: "
-                    f"d_real_mean={d_real_mean:.4f}, d_fake_mean={d_fake_mean:.4f}",
-                    stacklevel=2,
-                )
 
         with torch.no_grad():
             samples = generator_ema(fixed_noise).detach().cpu()

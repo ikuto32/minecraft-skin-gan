@@ -15,7 +15,7 @@ kid_subsets: 50
 kid_subset_size: 32
 enable_fid: true
 enable_kid: true
-enable_precision_recall: true
+enable_precision_recall: false
 device: null
 epoch: null
 resize: 64

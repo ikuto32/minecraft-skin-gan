@@ -12,9 +12,9 @@ wheels/
 __pycache__/
 *.pyc
 
-data/
-outputs/
-checkpoints/
-wandb/
+data*/
+outputs*/
+checkpoints*/
+wandb*/
 
 .DS_Store

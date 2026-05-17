@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy
-from torch_utils.ops import upfirdn2d
+from .torch_utils.ops import upfirdn2d
 
 
 def CreateLowpassKernel(Weights, Inplace):

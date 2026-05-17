@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import math
-from torch_utils.ops import bias_act
+from .torch_utils.ops import bias_act
 
 
 class BiasedActivationReference(nn.Module):

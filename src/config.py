@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from src.models.registry import list_model_names
+
 
 def _validate_positive(name: str, value: int) -> None:
     if value <= 0:
@@ -12,6 +14,15 @@ def _validate_positive(name: str, value: int) -> None:
 def _validate_non_negative(name: str, value: int) -> None:
     if value < 0:
         raise ValueError(f"{name} must be >= 0")
+
+
+def _validate_registered_model_name(model_name: str, *, path: str) -> None:
+    available_models = list_model_names()
+    if model_name not in available_models:
+        candidates = ", ".join(available_models)
+        raise ValueError(
+            f"{path} must be one of [{candidates}], got {model_name!r}"
+        )
 
 
 class ConfigValidationError(ValueError):
@@ -112,6 +123,7 @@ class TrainConfig(SchemaModel):
 
     @model_validator(mode="after")
     def _validate_runtime_constraints(self) -> "TrainConfig":
+        _validate_registered_model_name(self.model_name, path="model_name")
         _validate_positive("epochs", self.epochs)
         _validate_positive("batch_size", self.batch_size)
         _validate_positive("z_dim", self.z_dim)
@@ -184,6 +196,7 @@ class EvalConfig(SchemaModel):
 
     @model_validator(mode="after")
     def _validate_runtime_constraints(self) -> "EvalConfig":
+        _validate_registered_model_name(self.model_name, path="model_name")
         _validate_positive("sample_count", self.sample_count)
         _validate_positive("batch_size", self.batch_size)
         _validate_positive("z_dim", self.z_dim)

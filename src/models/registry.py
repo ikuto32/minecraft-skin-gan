@@ -53,8 +53,12 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
 }
 
 
+def list_model_names() -> list[str]:
+    return sorted(MODEL_REGISTRY.keys())
+
+
 def resolve_model(model_name: str) -> ModelSpec:
     if model_name not in MODEL_REGISTRY:
-        known = ", ".join(sorted(MODEL_REGISTRY.keys()))
+        known = ", ".join(list_model_names())
         raise ValueError(f"Unknown model_name={model_name!r}. Available: {known}")
     return MODEL_REGISTRY[model_name]

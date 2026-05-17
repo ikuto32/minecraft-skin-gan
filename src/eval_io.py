@@ -68,6 +68,7 @@ def append_metrics_history(result: EvalResult, output_dir: Path) -> Path:
                 "recall_best",
                 "recall_worst",
             ],
+            extrasaction="ignore",
         )
         if write_header:
             writer.writeheader()

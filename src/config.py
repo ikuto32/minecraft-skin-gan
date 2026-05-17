@@ -83,6 +83,8 @@ class TrainConfig(SchemaModel):
     num_workers: int = Field(default=2, ge=0)
     persistent_workers: bool = False
     prefetch_factor: int | None = Field(default=2, gt=0)
+    train_color_mode: Literal["RGB", "RGBA"] = "RGBA"
+    metric_color_mode: Literal["RGB", "RGBA"] = "RGB"
     eval_every: int = Field(default=10, gt=0)
     eval_sample_count: int = Field(default=2048, gt=0)
     eval_seed: int = Field(default=1234, gt=0)
@@ -181,6 +183,7 @@ class EvalConfig(SchemaModel):
     epoch: int | None = None
     resize: int = Field(default=64, gt=0)
     color_mode: Literal["RGB", "RGBA"] = "RGBA"
+    metric_color_mode: Literal["RGB", "RGBA"] = "RGB"
 
     @model_validator(mode="after")
     def _validate_runtime_constraints(self) -> "EvalConfig":

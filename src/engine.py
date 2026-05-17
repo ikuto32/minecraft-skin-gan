@@ -178,7 +178,7 @@ def train(config: TrainConfig) -> None:
         "runtime/amp_dtype_is_float16": int(amp_dtype_name == "float16"),
     })
 
-    dataset = SkinDataset(config.data_dir)
+    dataset = SkinDataset(config.data_dir, color_mode=config.train_color_mode)
     dataloader_kwargs = dict(
         batch_size=config.batch_size,
         shuffle=True,

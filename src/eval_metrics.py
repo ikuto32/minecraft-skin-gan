@@ -25,8 +25,14 @@ class EvalMetricsResult:
     recall: float | None = None
 
 
-def to_uint8_rgb(batch: torch.Tensor) -> torch.Tensor:
-    if batch.size(1) == 4:
+def to_uint8_rgb(batch: torch.Tensor, *, metric_color_mode: str) -> torch.Tensor:
+    """Convert normalized [0, 1] tensor images to uint8 for metric extractors.
+
+    FID/KID backends expect RGB-like inputs, so alpha is intentionally dropped when
+    `metric_color_mode="RGB"` and a 4ch batch is given.
+    When `metric_color_mode="RGBA"`, keep 4 channels as-is.
+    """
+    if metric_color_mode == "RGB" and batch.size(1) == 4:
         batch = batch[:, :3]
     return (batch.clamp(0, 1) * 255).round().to(torch.uint8)
 
@@ -160,7 +166,7 @@ def _update_real_metrics(
             take = min(sample_count - seen, real.size(0))
             real = real[:take].to(device, non_blocking=True)
 
-            real_u8 = to_uint8_rgb(real)
+            real_u8 = to_uint8_rgb(real, metric_color_mode=cfg.metric_color_mode)
             if fid is not None:
                 fid.update(real_u8, real=True)
             if kid is not None:
@@ -205,7 +211,7 @@ def _update_fake_metrics(
             )
             fake = generate_fake_batch(generator, noise)
 
-            fake_u8 = to_uint8_rgb(fake)
+            fake_u8 = to_uint8_rgb(fake, metric_color_mode=cfg.metric_color_mode)
             if fid is not None:
                 fid.update(fake_u8, real=False)
             if kid is not None:

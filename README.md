@@ -137,3 +137,20 @@ uv run python main.py mode=train \
 - `num_workers` / `eval_num_workers` は `0` を許容します（シングルプロセスDataLoader）。
 - `prefetch_factor` は `num_workers > 0` のときだけ有効です。`num_workers=0` の場合は `prefetch_factor=null` にしてください。
 - デフォルト例として `conf/mode/eval.yaml` は `num_workers: 0` を使用しています。
+
+
+## チャネル方針（学習時/評価時の仕様）
+
+本プロジェクトでは、チャネル方針を設定として明示し、学習入力と評価入力を分離して扱います。
+
+- 学習時チャネル: `train_color_mode`（`RGB` or `RGBA`）
+  - デフォルトは `RGBA` です。
+  - `SkinDataset` はこの設定で画像を読み込み、同じチャネル数で正規化します。
+- 評価用実画像チャネル: `color_mode`（`mode=eval`）
+  - 実画像ローダー (`RealImageDataset`) の読み込みチャネルを指定します。
+- 評価メトリクス入力チャネル: `metric_color_mode`（`train`/`eval` の両方で設定可能）
+  - デフォルトは `RGB` です。
+  - `metric_color_mode=RGB` の場合、4ch（RGBA）テンソルは先頭3chのみを使い、**alphaは破棄**します（現行仕様）。
+  - これにより、FID/KID計算に渡す入力のチャネル方針がハードコードではなく設定駆動になります。
+
+現時点の既定挙動（alpha破棄）を仕様として明記しているため、将来の回帰検知が容易になります。

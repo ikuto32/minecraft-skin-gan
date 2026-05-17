@@ -103,6 +103,15 @@ sample_count=2048
 uv run python main.py mode=eval enable_fid=true enable_kid=false enable_precision_recall=true
 ```
 
+### 各指標が使うサンプル集合（仕様固定）
+
+- `sample_count` は **FID / KID / Precision / Recall の全指標で共通**です。
+- 実画像（real）と生成画像（fake）はどちらも `sample_count` 枚ずつ使用します。
+- Precision / Recall 計算時は、FID/KID と同じ評価方針に揃えるために以下を適用した一時サンプル集合を使います。
+  - `color_mode`: RGB（アルファチャンネルは使わない）
+  - `resize`: 299x299（Inception系特徴抽出条件に合わせる）
+- つまり、PR は常に `sample_count` に追従し、`sample_count` を変更すると real/fake の評価集合サイズも同時に変わります。
+
 ### 指標の解釈（fidelity vs coverage）
 
 - **FID（低いほど良い）**: 生成分布が実データ分布にどれだけ近いかを測る、総合的なfidelity指標。

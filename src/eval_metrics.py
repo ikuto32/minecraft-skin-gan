@@ -10,6 +10,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.kid import KernelInceptionDistance
 from torch_fidelity import calculate_metrics
 from torchvision.utils import save_image
+from torchvision.transforms.functional import resize
 
 from src.config import EvalConfig
 import torch.nn as nn
@@ -102,8 +103,18 @@ def compute_metrics(
                 kid_mean_value = float(kid_mean.item())
                 kid_std_value = float(kid_std.item())
             if cfg.enable_precision_recall:
-                with TemporaryDirectory(prefix="eval_fake_samples_") as temp_dir:
-                    fake_dir = Path(temp_dir)
+                with (
+                    TemporaryDirectory(prefix="eval_real_samples_") as real_temp_dir,
+                    TemporaryDirectory(prefix="eval_fake_samples_") as fake_temp_dir,
+                ):
+                    real_dir = Path(real_temp_dir)
+                    fake_dir = Path(fake_temp_dir)
+                    _export_real_samples(
+                        loader=loader,
+                        output_dir=real_dir,
+                        sample_count=cfg.sample_count,
+                        resize_to=299,
+                    )
                     _export_generated_samples(
                         cfg=cfg,
                         loader=loader,
@@ -111,9 +122,10 @@ def compute_metrics(
                         output_dir=fake_dir,
                         sample_count=cfg.sample_count,
                         device=device,
+                        resize_to=299,
                     )
                     pr_metrics = calculate_metrics(
-                        input1=str(cfg.real_dir),
+                        input1=str(real_dir),
                         input2=str(fake_dir),
                         cuda=device == "cuda",
                         isc=False,
@@ -225,6 +237,7 @@ def _export_generated_samples(
     output_dir: Path,
     sample_count: int,
     device: str,
+    resize_to: int,
 ) -> int:
     seen = 0
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -236,10 +249,38 @@ def _export_generated_samples(
         take = min(sample_count - seen, real.size(0))
         noise = torch.randn(take, cfg.z_dim, 1, 1, device=device)
         fake = generate_fake_batch(generator, noise).clamp(0, 1).cpu()
+        fake = resize(fake, [resize_to, resize_to], antialias=True)
 
         for index_in_batch in range(take):
             image_path = output_dir / f"fake_{seen + index_in_batch:07d}.png"
             save_image(fake[index_in_batch], image_path)
+
+        seen += take
+
+    return seen
+
+
+def _export_real_samples(
+    *,
+    loader: DataLoader,
+    output_dir: Path,
+    sample_count: int,
+    resize_to: int,
+) -> int:
+    seen = 0
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for real in loader:
+        if seen >= sample_count:
+            break
+
+        take = min(sample_count - seen, real.size(0))
+        real_batch = real[:take].clamp(0, 1).cpu()
+        real_batch = resize(real_batch, [resize_to, resize_to], antialias=True)
+
+        for index_in_batch in range(take):
+            image_path = output_dir / f"real_{seen + index_in_batch:07d}.png"
+            save_image(real_batch[index_in_batch], image_path)
 
         seen += take
 

@@ -2,7 +2,7 @@ model_name: gan_resconv_v1  # dcgan_baseline | dcgan_improved | dcgan_resd | gan
 mode: train
 data_dir: data/skins
 epochs: 100
-batch_size: 256
+batch_size: 32
 z_dim: 32
 lr: 0.0001
 lr_g: 0.0001
@@ -32,14 +32,14 @@ eval_every: 1
 eval_sample_count: 2048
 eval_seed: 1234
 eval_seeds: [1234, 2024, 3407, 7777]
-eval_batch_size: 256
+eval_batch_size: 32
 eval_num_workers: 1
 eval_output_dir: outputs/eval
 kid_subsets: 50
 kid_subset_size: 32
 eval_enable_fid: true
 eval_enable_kid: true
-eval_enable_precision_recall: true
+eval_enable_precision_recall: false
 ema_beta: 0.999
 use_ada: true
 ada_target: 0.6

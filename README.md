@@ -132,6 +132,12 @@ uv run python main.py mode=train \
 - `outputs/eval/seed_metrics_latest.csv`（seed別FID/KID）
 
 
+
+## Loss設定メモ
+
+- `loss.name=wgan_gp` の場合のみ `loss.gp_lambda` を使用し、`loss.gp_lambda >= 0` が必須です。
+- `loss.name` が `wgan_gp` 以外のときは `loss.gp_lambda` は計算に使用されません（指定しても無視されます）。
+
 ## DataLoader worker設定
 
 - `num_workers` / `eval_num_workers` は `0` を許容します（シングルプロセスDataLoader）。

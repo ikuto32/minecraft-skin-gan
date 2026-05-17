@@ -122,6 +122,9 @@ uv run python main.py mode=eval enable_fid=true enable_kid=false enable_precisio
 - 学習時のデフォルトプリセットでは `eval_seeds: [1234, 2024, 3407, 7777]` を使用します。
 
 ```bash
+# eval_seeds は JSON風 / CSV風 の両形式を受け付けます:
+# - '[1234,2024,3407,7777]'
+# - '1234,2024,3407,7777'
 uv run python main.py mode=train \
   eval_every=1 \
   eval_seeds='[1234,2024,3407,7777]'

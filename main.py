@@ -14,12 +14,33 @@ from src.eval import evaluate
 def _parse_seed_list(value: object) -> list[int] | None:
     if value is None:
         return None
+
+    allowed = "JSON風 '[1234,2024,3407,7777]' または CSV風 '1234,2024,3407,7777'"
+
+    def _coerce_int_list(items: list[object]) -> list[int]:
+        try:
+            return [int(x) for x in items]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid seed list. 許可形式: {allowed}") from exc
+
     if isinstance(value, str):
-        items = [x.strip() for x in value.split(",") if x.strip()]
-        return [int(x) for x in items]
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON seed list. 許可形式: {allowed}") from exc
+            if not isinstance(parsed, list):
+                raise ValueError(f"Invalid JSON seed list. 許可形式: {allowed}")
+            return _coerce_int_list(parsed)
+
+        items = [x.strip() for x in text.split(",") if x.strip()]
+        return _coerce_int_list(items)
+
     if isinstance(value, list):
-        return [int(x) for x in value]
-    raise ValueError(f"Unsupported seed list type: {type(value)!r}")
+        return _coerce_int_list(value)
+
+    raise ValueError(f"Unsupported seed list type: {type(value)!r}. 許可形式: {allowed}")
 
 
 def _mode_payload(cfg: DictConfig) -> DictConfig:

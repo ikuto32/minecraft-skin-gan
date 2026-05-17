@@ -1,6 +1,7 @@
 from pathlib import Path
 import contextlib
 import copy
+import logging
 import random
 import warnings
 
@@ -19,6 +20,9 @@ from src.eval import evaluate
 from src.losses.gan_losses import build_gan_loss
 from src.models import resolve_model
 from src.tracking import Tracker, build_gan_diagnostics_payload
+
+
+logger = logging.getLogger(__name__)
 
 
 def _grad_l2_norm(module: nn.Module) -> float:
@@ -132,6 +136,146 @@ def _diffaugment(images: torch.Tensor, p: float, policy: str) -> torch.Tensor:
                 out[i, :, y0:y1, x0:x1] = 0.0
 
     return out.clamp_(-1.0, 1.0)
+
+
+def _warn_train_guard(message: str) -> None:
+    logger.warning(message)
+    warnings.warn(message, stacklevel=2)
+
+
+def _train_step(
+    *,
+    real: torch.Tensor,
+    generator: nn.Module,
+    generator_ema: nn.Module,
+    discriminator: nn.Module,
+    opt_g: optim.Optimizer,
+    opt_d: optim.Optimizer,
+    loss_strategy,
+    scaler: torch.amp.GradScaler,
+    config: TrainConfig,
+    device: str,
+    global_step: int,
+    ada_p: float,
+    autocast_context,
+) -> tuple[dict[str, float], int]:
+    batch_size = real.size(0)
+    d_loss_sum = 0.0
+    d_real_sum = 0.0
+    d_fake_sum = 0.0
+    d_adv_sum = 0.0
+    gp_sum = 0.0
+    r1_penalty_sum = 0.0
+    r2_penalty_sum = 0.0
+    d_real_sq_sum = 0.0
+    d_fake_sq_sum = 0.0
+    d_grad_norm_sum = 0.0
+    d_param_before = _snapshot_params(discriminator)
+
+    for _ in range(config.n_critic):
+        noise_d = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
+        discriminator.zero_grad(set_to_none=True)
+        with autocast_context():
+            fake = generator(noise_d)
+            d_real = discriminator(real)
+            d_fake = discriminator(fake.detach())
+            d_parts = loss_strategy.discriminator_loss(
+                d_real=d_real,
+                d_fake=d_fake,
+                real_images=real,
+                fake_images=fake.detach(),
+                discriminator=discriminator,
+                step=global_step,
+            )
+            d_loss = d_parts.loss
+
+        scaler.scale(d_loss).backward()
+        d_grad_norm_sum += _grad_l2_norm(discriminator)
+        scaler.step(opt_d)
+        global_step += 1
+
+        d_loss_sum += float(d_loss.item())
+        d_real_sum += float(d_real.mean().item())
+        d_fake_sum += float(d_fake.mean().item())
+        d_adv_sum += float(d_parts.adv.item())
+        gp_sum += float(d_parts.gp.item())
+        r1_penalty_sum += float(d_parts.r1.item())
+        r2_penalty_sum += float(d_parts.r2.item())
+        d_real_sq_sum += float(d_real.float().pow(2).mean().item())
+        d_fake_sq_sum += float(d_fake.float().pow(2).mean().item())
+
+    d_loss_value = d_loss_sum / config.n_critic
+    d_real_mean = d_real_sum / config.n_critic
+    d_fake_mean = d_fake_sum / config.n_critic
+    d_adv_value = d_adv_sum / config.n_critic
+    gp_value = gp_sum / config.n_critic
+    r1_penalty_value = r1_penalty_sum / config.n_critic
+    r2_penalty_value = r2_penalty_sum / config.n_critic
+    d_reg_value = d_loss_value - d_adv_value
+    d_real_var = max(0.0, (d_real_sq_sum / config.n_critic) - (d_real_mean**2))
+    d_fake_var = max(0.0, (d_fake_sq_sum / config.n_critic) - (d_fake_mean**2))
+    d_grad_norm = d_grad_norm_sum / config.n_critic
+    d_update_norm = _param_delta_l2_norm(d_param_before, discriminator)
+
+    noise_g = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
+    generator.zero_grad(set_to_none=True)
+    g_param_before = _snapshot_params(generator)
+    with autocast_context():
+        fake_for_g = generator(noise_g)
+        output = discriminator(fake_for_g)
+        g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
+
+    scaler.scale(g_loss).backward()
+    g_grad_norm = _grad_l2_norm(generator)
+    scaler.step(opt_g)
+    scaler.update()
+    _update_ema(generator_ema, generator, config.ema_beta)
+    g_update_norm = _param_delta_l2_norm(g_param_before, generator)
+    update_ratio = g_update_norm / max(d_update_norm, 1e-12)
+    g_loss_value = float(g_loss.item())
+
+    diagnostics = build_gan_diagnostics_payload(
+        d_real_mean=d_real_mean,
+        d_real_var=d_real_var,
+        d_fake_mean=d_fake_mean,
+        d_fake_var=d_fake_var,
+        grad_norm_g=g_grad_norm,
+        grad_norm_d=d_grad_norm,
+        update_norm_g=g_update_norm,
+        update_norm_d=d_update_norm,
+        update_ratio_g_over_d=update_ratio,
+    )
+    logs = {
+        "train/d_loss_step": d_loss_value,
+        "train/g_loss_step": g_loss_value,
+        "train/d_real_step": d_real_mean,
+        "train/d_fake_step": d_fake_mean,
+        "train/d_adv_step": d_adv_value,
+        "train/gp_step": gp_value,
+        "train/r1_penalty_step": r1_penalty_value,
+        "train/r2_penalty_step": r2_penalty_value,
+        "loss/d_adv_step": d_adv_value,
+        "loss/reg_step": d_reg_value,
+        "loss/gp_step": gp_value,
+        "loss/r1_step": r1_penalty_value,
+        "loss/r2_step": r2_penalty_value,
+        "train/ada_p_step": ada_p,
+        "train/ada_grad_step": 0.0,
+        "train/lr_g": float(opt_g.param_groups[0]["lr"]),
+        "train/lr_d": float(opt_d.param_groups[0]["lr"]),
+    } | diagnostics
+
+    if not torch.isfinite(torch.tensor([d_loss_value, g_loss_value, d_real_mean, d_fake_mean, g_grad_norm, d_grad_norm], dtype=torch.float32)).all():
+        _warn_train_guard(
+            f"[train-guard] non-finite detected at step={global_step}: "
+            f"D_loss={d_loss_value}, G_loss={g_loss_value}, d_real={d_real_mean}, d_fake={d_fake_mean}"
+        )
+    if max(g_grad_norm, d_grad_norm) > 1e3:
+        _warn_train_guard(
+            f"[train-guard] gradient explosion suspected at step={global_step}: "
+            f"grad_norm_g={g_grad_norm:.3e}, grad_norm_d={d_grad_norm:.3e}"
+        )
+    return logs, global_step
 
 
 def train(config: TrainConfig) -> None:

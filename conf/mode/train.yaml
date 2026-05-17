@@ -13,7 +13,7 @@ seed: 42
 deterministic: true
 cudnn_benchmark: true
 loss:
-  name: logistic_r1
+  name: r3gan_relativistic
   gp_lambda: 10.0
   r1_gamma: 10.0
   r1_interval: 16

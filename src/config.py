@@ -50,11 +50,11 @@ class TrackingConfig(SchemaModel):
 
 
 class LossConfig(SchemaModel):
-    name: Literal["hinge", "wgan_gp", "logistic_r1", "r3gan_relativistic"] = "hinge"
+    name: Literal["hinge", "wgan_gp", "logistic_r1", "r3gan_relativistic"] = "r3gan_relativistic"
     gp_lambda: float = 10.0
     r1_gamma: float = 10.0
     r1_interval: int = Field(default=16, gt=0)
-    r2_gamma: float = 0.0
+    r2_gamma: float = 10.0
     r2_interval: int = Field(default=16, gt=0)
     rel_scale: float = 1.0
     rel_margin: float = 0.0

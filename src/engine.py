@@ -223,7 +223,9 @@ def _train_step(
     with autocast_context():
         fake_for_g = generator(noise_g)
         output = discriminator(fake_for_g)
-        g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
+        with torch.no_grad():
+            d_real_for_g = discriminator(real)
+        g_loss = loss_strategy.generator_loss(d_fake_for_g=output, d_real_for_g=d_real_for_g)
 
     scaler.scale(g_loss).backward()
     g_grad_norm = _grad_l2_norm(generator)
@@ -514,7 +516,10 @@ def train(config: TrainConfig) -> None:
                 fake_for_g = generator(noise_g)
                 fake_for_g_aug = _diffaugment(fake_for_g, ada_p, config.ada_policy) if config.use_ada else fake_for_g
                 output = discriminator(fake_for_g_aug)
-                g_loss = loss_strategy.generator_loss(d_fake_for_g=output)
+                with torch.no_grad():
+                    real_for_g = _diffaugment(real, ada_p, config.ada_policy) if config.use_ada else real
+                    d_real_for_g = discriminator(real_for_g)
+                g_loss = loss_strategy.generator_loss(d_fake_for_g=output, d_real_for_g=d_real_for_g)
 
             scaler.scale(g_loss).backward()
             g_grad_norm = _grad_l2_norm(generator)

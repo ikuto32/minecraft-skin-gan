@@ -97,6 +97,7 @@ class TrainConfig(SchemaModel):
     train_color_mode: Literal["RGB", "RGBA"] = "RGBA"
     metric_color_mode: Literal["RGB", "RGBA"] = "RGB"
     eval_every: int = Field(default=10, gt=0)
+    sample_every_kimg: float = Field(default=0.0, ge=0.0)
     eval_sample_count: int = Field(default=2048, gt=0)
     eval_seed: int = Field(default=1234, gt=0)
     eval_seeds: list[int] | None = None

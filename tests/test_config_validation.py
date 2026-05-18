@@ -35,6 +35,10 @@ class TrainConfigValidationTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             TrainConfig.model_validate({"eval_seeds": ["1", "oops"]})
 
+    def test_sample_every_kimg_rejects_negative(self) -> None:
+        with self.assertRaises(ValidationError):
+            TrainConfig.model_validate({"sample_every_kimg": -0.5})
+
 
 class ValidateConfigsCliEntrypointTest(unittest.TestCase):
     def test_main_returns_zero_for_repository_configs(self) -> None:

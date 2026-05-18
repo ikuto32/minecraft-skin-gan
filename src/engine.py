@@ -367,6 +367,9 @@ def train(config: TrainConfig) -> None:
     )
 
     fixed_noise = torch.randn(64, config.z_dim, 1, 1, device=device)
+    sample_every_images = int(config.sample_every_kimg * 1000) if config.sample_every_kimg > 0 else 0
+    images_seen = 0
+    next_sample_image_count = sample_every_images if sample_every_images > 0 else None
     amp_enabled = device == "cuda" and amp_dtype_name != "none"
     amp_dtype = torch.bfloat16 if amp_dtype_name == "bfloat16" else torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda" and amp_dtype_name == "float16")
@@ -417,6 +420,7 @@ def train(config: TrainConfig) -> None:
             if channels_last_enabled:
                 real = real.contiguous(memory_format=torch.channels_last)
             batch_size = real.size(0)
+            images_seen += batch_size
 
             def autocast_context():
                 if amp_enabled:
@@ -584,6 +588,19 @@ def train(config: TrainConfig) -> None:
                     f"grad_norm_g={g_grad_norm:.3e}, grad_norm_d={d_grad_norm:.3e}",
                     stacklevel=2,
                 )
+
+            if next_sample_image_count is not None and images_seen >= next_sample_image_count:
+                with torch.no_grad():
+                    step_samples = generator_ema(fixed_noise).detach().cpu()
+                    step_samples = (step_samples + 1) / 2
+                    kimg_value = images_seen / 1000.0
+                    kimg_label = f"{kimg_value:.3f}".replace(".", "p")
+                    kimg_sample_path = Path(f"outputs/kimg_{kimg_label}.png")
+                    save_image(step_samples, kimg_sample_path, nrow=8)
+                tracker.log_image("samples_kimg", kimg_sample_path, step=global_step)
+                tracker.log_artifact(kimg_sample_path, artifact_path=f"images/kimg_{kimg_label}")
+                while next_sample_image_count is not None and images_seen >= next_sample_image_count:
+                    next_sample_image_count += sample_every_images
 
         with torch.no_grad():
             samples = generator_ema(fixed_noise).detach().cpu()

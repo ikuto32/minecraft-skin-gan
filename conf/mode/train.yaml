@@ -29,6 +29,7 @@ num_workers: 4
 persistent_workers: true
 prefetch_factor: 16
 eval_every: 1
+sample_every_kimg: 0.0
 eval_sample_count: 2048
 eval_seed: 1234
 eval_seeds: [1234, 2024, 3407, 7777]

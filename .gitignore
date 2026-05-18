@@ -18,3 +18,5 @@ checkpoints*/
 wandb*/
 
 .DS_Store
+
+.vs/

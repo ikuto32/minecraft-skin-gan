@@ -27,8 +27,8 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         discriminator_cls=R3GANDiscriminator,
         generator_hparams={
             "channels": 4,
-            "WidthPerStage": [512, 384, 256, 192, 128],
-            "CardinalityPerStage": [1, 1, 1, 1, 1],
+            "WidthPerStage": [384, 256, 192, 128, 96],
+            "CardinalityPerStage": [48, 32, 24, 16, 12],
             "BlocksPerStage": [2, 2, 2, 2, 2],
             "ExpansionFactor": 2,
             "KernelSize": 3,
@@ -36,8 +36,8 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         },
         discriminator_hparams={
             "channels": 4,
-            "WidthPerStage": [128, 192, 256, 384, 512],
-            "CardinalityPerStage": [1, 1, 1, 1, 1],
+            "WidthPerStage": [96, 128, 192, 256, 384],
+            "CardinalityPerStage": [12, 16, 24, 32, 48],
             "BlocksPerStage": [2, 2, 2, 2, 2],
             "ExpansionFactor": 2,
             "KernelSize": 3,

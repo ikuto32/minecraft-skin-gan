@@ -111,6 +111,7 @@ class TrainConfig(SchemaModel):
     eval_enable_precision_recall: bool = True
     ema_beta: float = 0.999
     use_ada: bool = False
+    ada_initial_p: float = Field(default=0.0, ge=0.0, le=1.0)
     ada_target: float = 0.6
     ada_grad_target: float = 0.2
     ada_sign_weight: float = 0.7

@@ -376,7 +376,7 @@ def train(config: TrainConfig) -> None:
     # global_step is defined as the number of discriminator updates.
     # This keeps step-based regularization intervals (R1/R2, ADA) aligned with D updates.
     global_step = 0
-    ada_p = 0.0
+    ada_p = config.ada_initial_p
     ada_sign_accum = 0.0
     ada_grad_accum = 0.0
     ada_seen = 0

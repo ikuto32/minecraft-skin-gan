@@ -43,6 +43,7 @@ eval_enable_kid: true
 eval_enable_precision_recall: false
 ema_beta: 0.999
 use_ada: true
+ada_initial_p: 0.0
 ada_target: 0.6
 ada_grad_target: 0.2
 ada_sign_weight: 1.0

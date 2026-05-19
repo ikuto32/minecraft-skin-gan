@@ -4,8 +4,8 @@ checkpoint: checkpoints/latest.pt
 real_dir: data/skins
 output_dir: outputs/eval
 sample_count: 65536
-batch_size: 256
-z_dim: 32
+batch_size: 128
+z_dim: 64
 seed: 1234
 deterministic: true
 cudnn_benchmark: false

@@ -352,9 +352,9 @@ def train(config: TrainConfig) -> None:
 
     discriminator = model_spec.discriminator_cls(**model_spec.discriminator_hparams).to(device, memory_format=memory_format)
 
-    opt_g = optim.Adam(generator.parameters(), lr=config.lr_g, betas=(0.5, 0.9))
-    opt_d = optim.Adam(discriminator.parameters(), lr=config.lr_d, betas=(0.5, 0.9))
-    print(f"TTUR learning rates -> lr_g={config.lr_g:.6g}, lr_d={config.lr_d:.6g}")
+    opt_g = optim.Adam(generator.parameters(), lr=config.lr_g, betas=(0.0, 0.9)) # Adamの一次 momentum は使わない
+    opt_d = optim.Adam(discriminator.parameters(), lr=config.lr_d, betas=(0.0, 0.9)) # Adamの一次 momentum は使わない
+    print(f"learning rates -> lr_g={config.lr_g:.6g}, lr_d={config.lr_d:.6g}")
     loss_strategy = build_gan_loss(
         config.loss.name,
         gp_lambda=config.loss.gp_lambda,

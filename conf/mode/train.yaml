@@ -1,6 +1,6 @@
 model_name: r3gan  # r3gan | dcgan_baseline | dcgan_improved | dcgan_resd | gan_resconv_v1
 mode: train
-data_dir: data/skins
+data_dir: data/skins_java_fixed
 epochs: 100
 batch_size: 128
 z_dim: 64
@@ -43,13 +43,13 @@ eval_enable_kid: true
 eval_enable_precision_recall: false
 ema_beta: 0.999
 use_ada: true
-ada_initial_p: 0.2
+ada_initial_p: 0.5
 ada_target: 0.6
 ada_grad_target: 0.2
 ada_sign_weight: 1.0
 ada_grad_weight: 0.0
 ada_policy: flip,noise,color,translation,cutout
-ada_interval: 4
+ada_interval: 16
 ada_speed: 0.001
 checkpoint_dir: checkpoints
 best_metric: fid

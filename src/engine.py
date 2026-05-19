@@ -105,7 +105,7 @@ def _diffaugment(images: torch.Tensor, p: float, policy: str) -> torch.Tensor:
         out = apply * torch.flip(out, dims=[3]) + (1.0 - apply) * out
 
     if "noise" in policies and p > 0.15:
-        out = out + torch.randn_like(out) * (0.05 * min(1.0, p))
+        out = out + torch.randn_like(out) * (0.05 * min(1.0, p - 0.15) / 0.85)
 
     if "color" in policies:
         apply = _rand_apply(out, p)

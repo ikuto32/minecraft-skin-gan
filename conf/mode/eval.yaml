@@ -1,7 +1,7 @@
 model_name: r3gan
 mode: eval
 checkpoint: checkpoints/latest.pt
-real_dir: data/skins
+real_dir: data/skins_java_fixed
 output_dir: outputs/eval
 sample_count: 65536
 batch_size: 128

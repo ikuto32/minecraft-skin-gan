@@ -112,10 +112,8 @@ class TrainConfig(SchemaModel):
     ema_beta: float = 0.999
     use_ada: bool = False
     ada_initial_p: float = Field(default=0.0, ge=0.0, le=1.0)
-    ada_target: float = 0.6
-    ada_grad_target: float = 0.2
-    ada_sign_weight: float = 0.7
-    ada_grad_weight: float = 0.3
+    ada_rel_acc_threshold: float = 0.8
+    ada_rel_acc_ema_beta: float = 0.99
     ada_interval: int = Field(default=4, gt=0)
     ada_speed: float = 0.001
     ada_policy: str = "flip,noise,color,translation,cutout"
@@ -141,14 +139,10 @@ class TrainConfig(SchemaModel):
         if not (self.eval_enable_fid or self.eval_enable_kid or self.eval_enable_precision_recall):
             raise ValueError("At least one eval metric must be enabled for periodic eval")
         _validate_positive("ada_interval", self.ada_interval)
-        if not 0.0 <= self.ada_target <= 1.0:
-            raise ValueError("ada_target must be within [0, 1]")
-        if self.ada_grad_target <= 0:
-            raise ValueError("ada_grad_target must be > 0")
-        if self.ada_sign_weight < 0 or self.ada_grad_weight < 0:
-            raise ValueError("ada_sign_weight and ada_grad_weight must be >= 0")
-        if (self.ada_sign_weight + self.ada_grad_weight) <= 0:
-            raise ValueError("sum of ada_sign_weight and ada_grad_weight must be > 0")
+        if not 0.0 <= self.ada_rel_acc_threshold <= 1.0:
+            raise ValueError("ada_rel_acc_threshold must be within [0, 1]")
+        if not 0.0 <= self.ada_rel_acc_ema_beta < 1.0:
+            raise ValueError("ada_rel_acc_ema_beta must be within [0, 1)")
         _validate_non_negative("num_workers", self.num_workers)
         _validate_non_negative("eval_num_workers", self.eval_num_workers)
         if self.num_workers == 0:

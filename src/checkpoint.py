@@ -26,7 +26,7 @@ def _summarize_train_config(train_config) -> dict[str, object]:
         "amp_dtype",
         "ema_beta",
         "use_ada",
-        "ada_target",
+        "ada_rel_acc_threshold",
         "ada_interval",
         "ada_speed",
         "best_metric",

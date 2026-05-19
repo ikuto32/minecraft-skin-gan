@@ -466,8 +466,10 @@ def train(config: TrainConfig) -> None:
                     d_rel_acc = (d_real.detach() > (d_fake.detach() + config.loss.rel_margin)).float().mean().item()
                     beta = config.ada_rel_acc_ema_beta
                     ada_rel_acc_ema = (beta * ada_rel_acc_ema) + ((1.0 - beta) * d_rel_acc)
-                    if ada_rel_acc_ema >= config.ada_rel_acc_threshold:
+                    if ada_rel_acc_ema > config.ada_rel_acc_threshold:
                         ada_p = float(min(1.0, ada_p + config.ada_speed))
+                    elif ada_rel_acc_ema < config.ada_rel_acc_threshold:
+                        ada_p = float(max(0.0, ada_p - config.ada_speed))
 
                 scaler.scale(d_loss).backward()
                 d_grad_norm_sum += _grad_l2_norm(discriminator)

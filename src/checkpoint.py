@@ -5,7 +5,7 @@ import subprocess
 
 import torch
 
-CURRENT_CHECKPOINT_SCHEMA_VERSION = 2
+CURRENT_CHECKPOINT_SCHEMA_VERSION = 3
 
 
 def _summarize_train_config(train_config) -> dict[str, object]:
@@ -54,6 +54,7 @@ def save_checkpoint(
     train_config=None,
     model_name: str = "unknown",
     model_hparams: dict[str, object] | None = None,
+    ada_p: float | None = None,
 ):
     payload = {
         "schema_version": CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -75,6 +76,8 @@ def save_checkpoint(
         payload["generator_ema"] = generator_ema.state_dict()
     if best_metric is not None:
         payload["best_metric"] = best_metric
+    if ada_p is not None:
+        payload["ada_p"] = float(ada_p)
     torch.save(payload, path)
 
 
@@ -106,4 +109,5 @@ def load_checkpoint(path: Path, generator, discriminator, opt_g, opt_d, device: 
         "model_type": ckpt.get("model_type"),
         "model_name": actual_model_name,
         "model_hparams": actual_model_hparams,
+        "ada_p": float(ckpt.get("ada_p", 0.0)),
     }

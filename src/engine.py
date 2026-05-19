@@ -402,6 +402,7 @@ def train(config: TrainConfig) -> None:
         )
         start_epoch = resume_info["start_epoch"]
         best_metric_value = resume_info["best_metric"]
+        ada_p = float(resume_info.get("ada_p", ada_p))
         _update_ema(generator_ema, generator, beta=0.0)
         print(
             f"Resumed from {resume_path} at epoch {start_epoch} "
@@ -437,6 +438,7 @@ def train(config: TrainConfig) -> None:
             d_real_sq_sum = 0.0
             d_fake_sq_sum = 0.0
             d_grad_norm_sum = 0.0
+            d_acc_sum = 0.0
 
             d_param_before = _snapshot_params(discriminator)
 
@@ -499,6 +501,10 @@ def train(config: TrainConfig) -> None:
                 r2_penalty_sum += float(d_parts.r2.item())
                 d_real_sq_sum += float(d_real.float().pow(2).mean().item())
                 d_fake_sq_sum += float(d_fake.float().pow(2).mean().item())
+                if config.use_ada:
+                    real_acc = (d_real.detach() > 0).float().mean().item()
+                    fake_acc = (d_fake.detach() < 0).float().mean().item()
+                    d_acc_sum += 0.5 * (real_acc + fake_acc)
 
             d_loss_value = d_loss_sum / config.n_critic
             d_real_mean = d_real_sum / config.n_critic
@@ -512,6 +518,7 @@ def train(config: TrainConfig) -> None:
             d_fake_var = max(0.0, (d_fake_sq_sum / config.n_critic) - (d_fake_mean**2))
             d_grad_norm = d_grad_norm_sum / config.n_critic
             d_update_norm = _param_delta_l2_norm(d_param_before, discriminator)
+            d_acc_value = d_acc_sum / config.n_critic if config.use_ada else None
 
             noise_g = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
             generator.zero_grad(set_to_none=True)
@@ -546,7 +553,7 @@ def train(config: TrainConfig) -> None:
                 "r2_penalty": f"{r2_penalty_value:.4f}",
                 "ada_p": f"{ada_p:.3f}",
             })
-            tracker.log_metrics({
+            step_metrics = {
                 "train/d_loss_step": d_loss_value,
                 "train/g_loss_step": g_loss_value,
                 "train/d_real_step": d_real_mean,
@@ -564,7 +571,10 @@ def train(config: TrainConfig) -> None:
                 "train/ada_grad_step": float(ada_grad_accum / max(1, (global_step % config.ada_interval) + 1)) if config.use_ada else 0.0,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
                 "train/lr_d": float(opt_d.param_groups[0]["lr"]),
-            } | build_gan_diagnostics_payload(
+            }
+            if config.use_ada and d_acc_value is not None:
+                step_metrics["train/d_acc_aug_step"] = d_acc_value
+            tracker.log_metrics(step_metrics | build_gan_diagnostics_payload(
                 d_real_mean=d_real_mean,
                 d_real_var=d_real_var,
                 d_fake_mean=d_fake_mean,
@@ -608,7 +618,7 @@ def train(config: TrainConfig) -> None:
             sample_path = Path(f"outputs/epoch_{epoch + 1:04d}.png")
             save_image(samples, sample_path, nrow=8)
 
-        tracker.log_metrics({
+        epoch_metrics = {
             "train/d_loss": d_loss_value,
             "train/g_loss": g_loss_value,
             "train/d_real": d_real_mean,
@@ -624,15 +634,18 @@ def train(config: TrainConfig) -> None:
             "loss/r2": r2_penalty_value,
             "train/ada_p": ada_p,
             "train/epoch": epoch + 1,
-        }, step=global_step, epoch=epoch + 1)
+        }
+        if config.use_ada and d_acc_value is not None:
+            epoch_metrics["train/d_acc_aug"] = d_acc_value
+        tracker.log_metrics(epoch_metrics, step=global_step, epoch=epoch + 1)
         tracker.log_histogram("train/fake_pixel_distribution", samples, step=global_step)
         tracker.log_image("samples", sample_path, step=global_step)
         tracker.log_artifact(sample_path, artifact_path=f"images/epoch_{epoch + 1:04d}")
 
-        save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
+        save_checkpoint(config.checkpoint_dir / "latest.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams}, ada_p=ada_p)
 
         if (epoch + 1) % 10 == 0:
-            save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
+            save_checkpoint(config.checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams}, ada_p=ada_p)
 
         if config.eval_every > 0 and (epoch + 1) % config.eval_every == 0:
             eval_seeds = config.eval_seeds if config.eval_seeds else None
@@ -692,7 +705,7 @@ def train(config: TrainConfig) -> None:
                 tracker.log_artifact(seed_csv, artifact_path="eval")
             if metric_value < best_metric_value:
                 best_metric_value = metric_value
-                save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams})
+                save_checkpoint(config.checkpoint_dir / "best.pt", epoch, generator, discriminator, opt_g, opt_d, generator_ema=generator_ema, best_metric=best_metric_value, train_config=config, model_name=config.model_name, model_hparams={"generator": model_spec.generator_hparams, "discriminator": model_spec.discriminator_hparams}, ada_p=ada_p)
                 print(f"New best model saved: {config.best_metric}={best_metric_value:.6f}")
             print(
                 f"Eval @ epoch {epoch + 1}: "

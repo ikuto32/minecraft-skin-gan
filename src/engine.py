@@ -438,7 +438,8 @@ def train(config: TrainConfig) -> None:
             d_real_sq_sum = 0.0
             d_fake_sq_sum = 0.0
             d_grad_norm_sum = 0.0
-            d_acc_sum = 0.0
+            d_sign_acc_sum = 0.0
+            d_rel_acc_sum = 0.0
 
             d_param_before = _snapshot_params(discriminator)
 
@@ -501,10 +502,10 @@ def train(config: TrainConfig) -> None:
                 r2_penalty_sum += float(d_parts.r2.item())
                 d_real_sq_sum += float(d_real.float().pow(2).mean().item())
                 d_fake_sq_sum += float(d_fake.float().pow(2).mean().item())
-                if config.use_ada:
-                    real_acc = (d_real.detach() > 0).float().mean().item()
-                    fake_acc = (d_fake.detach() < 0).float().mean().item()
-                    d_acc_sum += 0.5 * (real_acc + fake_acc)
+                real_acc = (d_real.detach() > 0).float().mean().item()
+                fake_acc = (d_fake.detach() < 0).float().mean().item()
+                d_sign_acc_sum += 0.5 * (real_acc + fake_acc)
+                d_rel_acc_sum += (d_real.detach() > (d_fake.detach() + config.loss.rel_margin)).float().mean().item()
 
             d_loss_value = d_loss_sum / config.n_critic
             d_real_mean = d_real_sum / config.n_critic
@@ -518,7 +519,8 @@ def train(config: TrainConfig) -> None:
             d_fake_var = max(0.0, (d_fake_sq_sum / config.n_critic) - (d_fake_mean**2))
             d_grad_norm = d_grad_norm_sum / config.n_critic
             d_update_norm = _param_delta_l2_norm(d_param_before, discriminator)
-            d_acc_value = d_acc_sum / config.n_critic if config.use_ada else None
+            d_sign_acc_value = d_sign_acc_sum / config.n_critic
+            d_rel_acc_value = d_rel_acc_sum / config.n_critic
 
             noise_g = torch.randn(batch_size, config.z_dim, 1, 1, device=device)
             generator.zero_grad(set_to_none=True)
@@ -572,8 +574,8 @@ def train(config: TrainConfig) -> None:
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
                 "train/lr_d": float(opt_d.param_groups[0]["lr"]),
             }
-            if config.use_ada and d_acc_value is not None:
-                step_metrics["train/d_acc_aug_step"] = d_acc_value
+            step_metrics["train/d_sign_acc_step"] = d_sign_acc_value
+            step_metrics["train/d_rel_acc_step"] = d_rel_acc_value
             tracker.log_metrics(step_metrics | build_gan_diagnostics_payload(
                 d_real_mean=d_real_mean,
                 d_real_var=d_real_var,
@@ -635,8 +637,8 @@ def train(config: TrainConfig) -> None:
             "train/ada_p": ada_p,
             "train/epoch": epoch + 1,
         }
-        if config.use_ada and d_acc_value is not None:
-            epoch_metrics["train/d_acc_aug"] = d_acc_value
+        epoch_metrics["train/d_sign_acc"] = d_sign_acc_value
+        epoch_metrics["train/d_rel_acc"] = d_rel_acc_value
         tracker.log_metrics(epoch_metrics, step=global_step, epoch=epoch + 1)
         tracker.log_histogram("train/fake_pixel_distribution", samples, step=global_step)
         tracker.log_image("samples", sample_path, step=global_step)

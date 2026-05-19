@@ -44,10 +44,8 @@ eval_enable_precision_recall: false
 ema_beta: 0.999
 use_ada: true
 ada_initial_p: 0.2
-ada_target: 0.6
-ada_grad_target: 0.2
-ada_sign_weight: 1.0
-ada_grad_weight: 0.0
+ada_rel_acc_threshold: 0.8
+ada_rel_acc_ema_beta: 0.99
 ada_policy: flip,noise,color,translation,cutout
 ada_interval: 4
 ada_speed: 0.001

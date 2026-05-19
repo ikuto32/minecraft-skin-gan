@@ -377,9 +377,7 @@ def train(config: TrainConfig) -> None:
     # This keeps step-based regularization intervals (R1/R2, ADA) aligned with D updates.
     global_step = 0
     ada_p = config.ada_initial_p
-    ada_sign_accum = 0.0
-    ada_grad_accum = 0.0
-    ada_seen = 0
+    ada_rel_acc_ema = 0.0
 
     start_epoch = 0
     best_metric_value = float("inf")
@@ -464,29 +462,12 @@ def train(config: TrainConfig) -> None:
                     )
                     d_loss = d_parts.loss
 
-                if config.use_ada:
-                    ada_sign_accum += (d_real.detach().sign() > 0).float().sum().item()
-                    ada_seen += d_real.numel()
-                    real_grad = torch.autograd.grad(
-                        outputs=d_real.sum(),
-                        inputs=real_for_d,
-                        create_graph=False,
-                        retain_graph=True,
-                        only_inputs=True,
-                        allow_unused=False,
-                    )[0]
-                    ada_grad_accum += real_grad.detach().float().pow(2).mean().sqrt().item()
-                    if global_step > 0 and global_step % config.ada_interval == 0 and ada_seen > 0:
-                        ada_sign = ada_sign_accum / ada_seen
-                        ada_grad = ada_grad_accum / config.ada_interval
-                        sign_term = (ada_sign - config.ada_target)
-                        grad_term = (ada_grad - config.ada_grad_target) / max(config.ada_grad_target, 1e-8)
-                        wsum = config.ada_sign_weight + config.ada_grad_weight
-                        combined = (config.ada_sign_weight * sign_term + config.ada_grad_weight * grad_term) / wsum
-                        ada_p = float(min(1.0, max(0.0, ada_p + (combined * config.ada_speed))))
-                        ada_sign_accum = 0.0
-                        ada_grad_accum = 0.0
-                        ada_seen = 0
+                if config.use_ada and global_step > 0 and global_step % config.ada_interval == 0:
+                    d_rel_acc = (d_real.detach() > (d_fake.detach() + config.loss.rel_margin)).float().mean().item()
+                    beta = config.ada_rel_acc_ema_beta
+                    ada_rel_acc_ema = (beta * ada_rel_acc_ema) + ((1.0 - beta) * d_rel_acc)
+                    if ada_rel_acc_ema >= config.ada_rel_acc_threshold:
+                        ada_p = float(min(1.0, ada_p + config.ada_speed))
 
                 scaler.scale(d_loss).backward()
                 d_grad_norm_sum += _grad_l2_norm(discriminator)
@@ -570,7 +551,7 @@ def train(config: TrainConfig) -> None:
                 "loss/r1_step": r1_penalty_value,
                 "loss/r2_step": r2_penalty_value,
                 "train/ada_p_step": ada_p,
-                "train/ada_grad_step": float(ada_grad_accum / max(1, (global_step % config.ada_interval) + 1)) if config.use_ada else 0.0,
+                "train/ada_rel_acc_ema_step": ada_rel_acc_ema if config.use_ada else 0.0,
                 "train/lr_g": float(opt_g.param_groups[0]["lr"]),
                 "train/lr_d": float(opt_d.param_groups[0]["lr"]),
             }

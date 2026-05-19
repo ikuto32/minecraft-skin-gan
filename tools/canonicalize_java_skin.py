@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 from tqdm import tqdm
 
+
 SUPPORTED_SIZES = {(64, 64), (64, 32)}
 
 
@@ -27,113 +28,156 @@ def add_box(mask: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> None:
     mask[y0:y1, x0:x1] = True
 
 
+def add_cuboid_net(mask: np.ndarray, *, x: int, y: int, w: int, d: int, h: int) -> None:
+    """
+    Add the used pixels of a Minecraft cuboid UV net.
+
+    Minecraft UV net layout, excluding unused upper-left and upper-right corners:
+
+        row 0, height d:
+          [unused d] [top w] [bottom w] [unused d]
+
+        row 1, height h:
+          [side d] [front w] [side d] [back w]
+
+    Total net size:
+      width  = 2 * (w + d)
+      height = d + h
+
+    Coordinates are [x0:x1), [y0:y1).
+    """
+    # Top face.
+    add_box(mask, x + d, y, x + d + w, y + d)
+
+    # Bottom face.
+    add_box(mask, x + d + w, y, x + d + 2 * w, y + d)
+
+    # Side/front/back row.
+    add_box(mask, x, y + d, x + 2 * (w + d), y + d + h)
+
+
 def build_java_wide_arm_masks(width: int, height: int) -> RegionMasks:
     """
-    Java Edition canonical UV masks.
+    Build Java Edition skin UV masks.
 
-    This intentionally treats every 64x64 skin as the wide-arm layout.
-    Slim-arm-specific unused areas are not modeled, by design.
+    Important:
+      - All 64x64 skins are treated as wide-arm skins.
+      - Slim-arm-specific unused pixels are intentionally ignored.
+      - Head/body/arm/leg corner pixels outside the actual cuboid faces are treated as unused.
+      - Coordinates are [x0:x1), [y0:y1).
 
-    Supported:
-      - 64x64 modern Java skin
-      - 64x32 legacy Java skin
-
-    Coordinate convention:
-      x0/y0 inclusive, x1/y1 exclusive.
+    Supported sizes:
+      - 64x64: modern Java skin
+      - 64x32: legacy Java skin
     """
     if (width, height) not in SUPPORTED_SIZES:
         raise ValueError(f"Unsupported skin size: {width}x{height}. Expected 64x64 or 64x32.")
 
     base = np.zeros((height, width), dtype=bool)
     overlay = np.zeros((height, width), dtype=bool)
-    unused = np.zeros((height, width), dtype=bool)
 
     # Head base and head overlay.
-    add_box(base, 0, 0, 32, 16)
-    add_box(overlay, 32, 0, 64, 16)
+    # Head dimensions: w=8, d=8, h=8; net size 32x16.
+    add_cuboid_net(base, x=0, y=0, w=8, d=8, h=8)
+    add_cuboid_net(overlay, x=32, y=0, w=8, d=8, h=8)
 
-    # Legacy-compatible base body parts.
-    add_box(base, 0, 16, 16, 32)    # right leg base
-    add_box(base, 16, 16, 40, 32)   # torso base
-    add_box(base, 40, 16, 56, 32)   # right arm base, wide-arm layout
+    # Shared 64x32 body parts.
+    # Right leg: w=4, d=4, h=12; net size 16x16.
+    add_cuboid_net(base, x=0, y=16, w=4, d=4, h=12)
 
-    if height == 32:
-        add_box(unused, 56, 16, 64, 32)
-    else:
-        # 64x64 modern layout.
-        add_box(overlay, 0, 32, 16, 48)   # right leg overlay
-        add_box(overlay, 16, 32, 40, 48)  # torso overlay
-        add_box(overlay, 40, 32, 56, 48)  # right arm overlay, wide-arm layout
+    # Torso: w=8, d=4, h=12; net size 24x16.
+    add_cuboid_net(base, x=16, y=16, w=8, d=4, h=12)
 
-        add_box(overlay, 0, 48, 16, 64)   # left leg overlay
-        add_box(base, 16, 48, 32, 64)     # left leg base
-        add_box(base, 32, 48, 48, 64)     # left arm base, wide-arm layout
-        add_box(overlay, 48, 48, 64, 64)  # left arm overlay, wide-arm layout
+    # Right arm, wide-arm layout: w=4, d=4, h=12; net size 16x16.
+    add_cuboid_net(base, x=40, y=16, w=4, d=4, h=12)
 
-        add_box(unused, 56, 16, 64, 48)
+    if height == 64:
+        # 64x64 second-layer overlays and left-side limbs.
+        add_cuboid_net(overlay, x=0, y=32, w=4, d=4, h=12)   # right leg overlay
+        add_cuboid_net(overlay, x=16, y=32, w=8, d=4, h=12)  # torso overlay
+        add_cuboid_net(overlay, x=40, y=32, w=4, d=4, h=12)  # right arm overlay
+
+        add_cuboid_net(overlay, x=0, y=48, w=4, d=4, h=12)   # left leg overlay
+        add_cuboid_net(base, x=16, y=48, w=4, d=4, h=12)     # left leg base
+        add_cuboid_net(base, x=32, y=48, w=4, d=4, h=12)     # left arm base
+        add_cuboid_net(overlay, x=48, y=48, w=4, d=4, h=12)  # left arm overlay
+
+    used = base | overlay
+    unused = ~used
 
     return RegionMasks(base=base, overlay=overlay, unused=unused)
 
 
-def quantize_inner_layer_rgb(rgb: np.ndarray, alpha: np.ndarray) -> np.ndarray:
-    """
-    Apply Java Edition inner-layer opacity quantization.
+def round_div_half_up(numerator: np.ndarray, denominator: np.ndarray | int) -> np.ndarray:
+    """Integer round-half-up for non-negative values."""
+    return (2 * numerator + denominator) // (2 * denominator)
 
-    For each base-layer pixel:
-      - alpha == 0:
+
+def quantize_inner_layer_rgb(rgb: np.ndarray, alpha_opacity: np.ndarray) -> np.ndarray:
+    """
+    Java Edition inner-layer color reduction.
+
+    PNG alpha is opacity:
+      - 0   = fully transparent
+      - 255 = fully opaque
+
+    For a base-layer pixel with opacity a:
+      - a == 0:
           RGB becomes solid black.
-      - alpha in 1..254:
-          channel c is rounded to one of:
-              round(255 * k / alpha), k in [0, alpha]
-          where k is round(c * alpha / 255).
-          Output alpha is handled outside this function.
-      - alpha == 255:
-          RGB remains unchanged.
+      - a in 1..255:
+          RGB is rounded to one of a+1 possible levels:
+              round(255 * k / a), where k = round(channel * a / 255)
 
-    This implements half-up integer rounding rather than NumPy's bankers rounding.
+    Example:
+      a = 2 gives levels 0, 128, 255.
+      RGB(255, 13, 142) becomes RGB(255, 0, 128).
     """
-    if rgb.dtype != np.uint8 or alpha.dtype != np.uint8:
-        raise TypeError("rgb and alpha must be uint8 arrays")
+    if rgb.dtype != np.uint8 or alpha_opacity.dtype != np.uint8:
+        raise TypeError("rgb and alpha_opacity must be uint8 arrays")
+
+    if rgb.ndim != 2 or rgb.shape[1] != 3:
+        raise ValueError(f"rgb must be shaped [N, 3], got {rgb.shape}")
+    if alpha_opacity.ndim != 1 or alpha_opacity.shape[0] != rgb.shape[0]:
+        raise ValueError("alpha_opacity must be shaped [N] and match rgb")
 
     out = np.zeros_like(rgb, dtype=np.uint8)
 
-    nonzero = alpha > 0
-    if not np.any(nonzero):
+    visible = alpha_opacity > 0
+    if not np.any(visible):
         return out
 
-    c = rgb[nonzero].astype(np.uint32)            # [N, 3]
-    a = alpha[nonzero].astype(np.uint32)[:, None] # [N, 1]
+    c = rgb[visible].astype(np.uint32)
+    a = alpha_opacity[visible].astype(np.uint32)[:, None]
 
-    # k = round_half_up(c * a / 255)
-    k = (2 * c * a + 255) // (2 * 255)
+    # k = round(channel * opacity / 255), k in [0, opacity].
+    k = round_div_half_up(c * a, 255)
 
-    # q = round_half_up(255 * k / a)
-    q = (2 * 255 * k + a) // (2 * a)
-    q = np.clip(q, 0, 255).astype(np.uint8)
+    # q = round(255 * k / opacity), q in [0, 255].
+    q = round_div_half_up(255 * k, a)
+    out[visible] = np.clip(q, 0, 255).astype(np.uint8)
 
-    out[nonzero] = q
     return out
 
 
-def canonicalize_java_skin(arr: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
+def canonicalize_java_skin_rgba(arr: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
     """
-    Project an RGBA Minecraft skin image onto the requested Java Edition constraints.
+    Canonicalize an RGBA Minecraft skin according to Java Edition constraints.
 
     Rules:
-      1. Use wide-arm Java UV masks. Slim-arm-specific unused areas are ignored.
-      2. Base/inner layer:
-           - RGB is quantized according to the original alpha value.
+      1. wide arms are assumed; slim arms are not distinguished.
+      2. base/inner layer:
+           - use original PNG alpha as opacity for RGB quantization.
            - alpha=0 becomes solid black.
-           - final alpha is 255 for all base pixels.
-      3. Unused region:
+           - final alpha is 255, because Java inner layer cannot be transparent.
+      3. unused region:
            - alpha is set to 0.
            - RGB is set to 0.
-      4. Overlay/outer layer:
-           - if alpha == 0, RGB is set to 0.
-           - otherwise RGB/alpha are preserved.
+      4. overlay/outer layer:
+           - if alpha == 0, set RGB to 0.
+           - otherwise preserve RGB and alpha.
     """
     if arr.dtype != np.uint8:
-        raise TypeError("Expected uint8 RGBA image array")
+        raise TypeError("Expected uint8 RGBA array")
     if arr.ndim != 3 or arr.shape[2] != 4:
         raise ValueError(f"Expected HxWx4 RGBA array, got {arr.shape}")
 
@@ -143,57 +187,61 @@ def canonicalize_java_skin(arr: np.ndarray) -> tuple[np.ndarray, dict[str, int]]
     original = arr
     out = arr.copy()
 
+    rgb_in = original[:, :, :3]
+    alpha_in = original[:, :, 3]
+
+    rgb_out = out[:, :, :3]
+    alpha_out = out[:, :, 3]
+
     base = masks.base
     overlay = masks.overlay
     unused = masks.unused
 
-    orig_alpha = original[:, :, 3]
-    orig_rgb = original[:, :, :3]
+    base_alpha_before = alpha_in[base].copy()
+    base_rgb_before = rgb_in[base].copy()
 
-    # Base layer: Java inner-layer behavior.
-    base_rgb_before = out[:, :, :3][base].copy()
-    base_alpha_before = out[:, :, 3][base].copy()
+    unused_alpha_before = alpha_in[unused].copy()
+    unused_rgb_before = rgb_in[unused].copy()
 
-    quantized_base_rgb = quantize_inner_layer_rgb(orig_rgb[base], orig_alpha[base])
-    out[:, :, :3][base] = quantized_base_rgb
-    out[:, :, 3][base] = 255
+    overlay_alpha_before = alpha_in[overlay].copy()
+    overlay_rgb_before = rgb_in[overlay].copy()
 
-    base_rgb_after = out[:, :, :3][base]
-    base_alpha_after = out[:, :, 3][base]
+    # Base / inner layer.
+    rgb_out[base] = quantize_inner_layer_rgb(rgb_in[base], alpha_in[base])
+    alpha_out[base] = 255
 
     # Unused region: canonical transparent black.
-    unused_rgb_nonzero_before = np.any(out[:, :, :3][unused] != 0, axis=1)
-    unused_alpha_positive_before = out[:, :, 3][unused] > 0
+    rgb_out[unused] = 0
+    alpha_out[unused] = 0
 
-    out[:, :, :3][unused] = 0
-    out[:, :, 3][unused] = 0
-
-    # Overlay: transparent pixels should carry no hidden RGB.
-    overlay_alpha_zero = out[:, :, 3][overlay] == 0
-    overlay_rgb_before = out[:, :, :3][overlay].copy()
-
-    overlay_rgb = out[:, :, :3][overlay]
-    overlay_rgb[overlay_alpha_zero] = 0
-    out[:, :, :3][overlay] = overlay_rgb
-
-    overlay_rgb_after = out[:, :, :3][overlay]
+    # Overlay / outer layer: clear hidden RGB only for fully transparent pixels.
+    overlay_transparent = alpha_out[overlay] == 0
+    overlay_rgb_work = rgb_out[overlay]
+    overlay_rgb_work[overlay_transparent] = 0
+    rgb_out[overlay] = overlay_rgb_work
 
     stats = {
         "changed": int(np.any(out != original)),
         "changed_pixels": int(np.count_nonzero(np.any(out != original, axis=2))),
+
         "base_pixels": int(np.count_nonzero(base)),
         "base_alpha_zero_pixels": int(np.count_nonzero(base_alpha_before == 0)),
         "base_alpha_semitransparent_pixels": int(np.count_nonzero((base_alpha_before > 0) & (base_alpha_before < 255))),
-        "base_alpha_changed_pixels": int(np.count_nonzero(base_alpha_before != base_alpha_after)),
-        "base_rgb_changed_pixels": int(np.count_nonzero(np.any(base_rgb_before != base_rgb_after, axis=1))),
+        "base_alpha_not_opaque_pixels": int(np.count_nonzero(base_alpha_before < 255)),
+        "base_alpha_changed_pixels": int(np.count_nonzero(alpha_out[base] != base_alpha_before)),
+        "base_rgb_changed_pixels": int(np.count_nonzero(np.any(rgb_out[base] != base_rgb_before, axis=1))),
+
         "unused_pixels": int(np.count_nonzero(unused)),
-        "unused_alpha_positive_pixels": int(np.count_nonzero(unused_alpha_positive_before)),
-        "unused_rgb_nonzero_pixels": int(np.count_nonzero(unused_rgb_nonzero_before)),
+        "unused_alpha_positive_pixels": int(np.count_nonzero(unused_alpha_before > 0)),
+        "unused_rgb_nonzero_pixels": int(np.count_nonzero(np.any(unused_rgb_before != 0, axis=1))),
+        "unused_changed_pixels": int(np.count_nonzero(np.any(out[unused] != original[unused], axis=1))),
+
         "overlay_pixels": int(np.count_nonzero(overlay)),
+        "overlay_alpha_zero_pixels": int(np.count_nonzero(overlay_alpha_before == 0)),
         "overlay_alpha_zero_rgb_nonzero_pixels": int(
-            np.count_nonzero(overlay_alpha_zero & np.any(overlay_rgb_before != 0, axis=1))
+            np.count_nonzero((overlay_alpha_before == 0) & np.any(overlay_rgb_before != 0, axis=1))
         ),
-        "overlay_rgb_changed_pixels": int(np.count_nonzero(np.any(overlay_rgb_before != overlay_rgb_after, axis=1))),
+        "overlay_rgb_changed_pixels": int(np.count_nonzero(np.any(rgb_out[overlay] != overlay_rgb_before, axis=1))),
     }
 
     return out, stats
@@ -202,22 +250,21 @@ def canonicalize_java_skin(arr: np.ndarray) -> tuple[np.ndarray, dict[str, int]]
 def iter_png_files(input_path: Path, recursive: bool) -> list[Path]:
     if input_path.is_file():
         if input_path.suffix.lower() != ".png":
-            raise ValueError(f"Input file is not a PNG: {input_path}")
+            raise ValueError(f"Input file is not PNG: {input_path}")
         return [input_path]
 
     pattern = "**/*.png" if recursive else "*.png"
     return sorted(p for p in input_path.glob(pattern) if p.is_file())
 
 
-def load_processed_paths(log_path: Path) -> set[str]:
+def load_processed_sources(jsonl_path: Path) -> set[str]:
     processed: set[str] = set()
-    if not log_path.exists():
+    if not jsonl_path.exists():
         return processed
 
-    with log_path.open("r", encoding="utf-8") as f:
+    with jsonl_path.open("r", encoding="utf-8") as f:
         for line in f:
-            line = line.strip()
-            if not line:
+            if not line.strip():
                 continue
             try:
                 rec = json.loads(line)
@@ -229,6 +276,16 @@ def load_processed_paths(log_path: Path) -> set[str]:
     return processed
 
 
+def resolve_output_path(source: Path, input_root: Path, output_dir: Path, in_place: bool) -> Path:
+    if in_place:
+        return source
+
+    if input_root.is_file():
+        return output_dir / source.name
+
+    return output_dir / source.relative_to(input_root)
+
+
 def atomic_save_png(image: Image.Image, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output_path.with_name(f".{output_path.name}.tmp.{os.getpid()}")
@@ -236,18 +293,8 @@ def atomic_save_png(image: Image.Image, output_path: Path) -> None:
     tmp_path.replace(output_path)
 
 
-def resolve_output_path(path: Path, input_root: Path, output_dir: Path, in_place: bool) -> Path:
-    if in_place:
-        return path
-
-    if input_root.is_file():
-        return output_dir / path.name
-
-    return output_dir / path.relative_to(input_root)
-
-
 def process_one(
-    path: Path,
+    source: Path,
     *,
     input_root: Path,
     output_dir: Path,
@@ -256,9 +303,11 @@ def process_one(
     dry_run: bool,
     copy_unsupported: bool,
 ) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "source": str(path),
-        "output": None,
+    output_path = resolve_output_path(source, input_root, output_dir, in_place)
+
+    rec: dict[str, Any] = {
+        "source": str(source),
+        "output": str(output_path),
         "status": "unknown",
         "width": None,
         "height": None,
@@ -266,52 +315,45 @@ def process_one(
         "error": None,
     }
 
-    output_path = resolve_output_path(path, input_root, output_dir, in_place)
-    record["output"] = str(output_path)
-
     if output_path.exists() and not overwrite and not in_place and not dry_run:
-        record["status"] = "skipped_output_exists"
-        return record
+        rec["status"] = "skipped_output_exists"
+        return rec
 
     try:
-        with Image.open(path) as img:
-            record["mode"] = img.mode
-            record["width"], record["height"] = img.size
+        with Image.open(source) as img:
+            rec["mode"] = img.mode
+            rec["width"], rec["height"] = img.size
 
             if img.size not in SUPPORTED_SIZES:
-                record["status"] = "unsupported_size"
-                record["error"] = f"unsupported size {img.size[0]}x{img.size[1]}"
+                rec["status"] = "unsupported_size"
+                rec["error"] = f"unsupported size: {img.size[0]}x{img.size[1]}"
                 if copy_unsupported and not dry_run and not in_place:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     if overwrite or not output_path.exists():
-                        import shutil
-                        shutil.copy2(path, output_path)
-                return record
+                        output_path.write_bytes(source.read_bytes())
+                return rec
 
-            rgba = img.convert("RGBA")
-            arr = np.asarray(rgba, dtype=np.uint8).copy()
+            arr = np.asarray(img.convert("RGBA"), dtype=np.uint8).copy()
 
-        fixed, stats = canonicalize_java_skin(arr)
-        record.update(stats)
+        fixed, stats = canonicalize_java_skin_rgba(arr)
+        rec.update(stats)
 
         if dry_run:
-            record["status"] = "dry_run_changed" if stats["changed"] else "dry_run_unchanged"
-            return record
+            rec["status"] = "dry_run_changed" if stats["changed"] else "dry_run_unchanged"
+            return rec
 
-        fixed_img = Image.fromarray(fixed, mode="RGBA")
-        atomic_save_png(fixed_img, output_path)
-
-        record["status"] = "changed" if stats["changed"] else "unchanged"
-        return record
+        atomic_save_png(Image.fromarray(fixed, mode="RGBA"), output_path)
+        rec["status"] = "changed" if stats["changed"] else "unchanged"
+        return rec
 
     except UnidentifiedImageError as exc:
-        record["status"] = "unreadable"
-        record["error"] = str(exc)
-        return record
+        rec["status"] = "unreadable"
+        rec["error"] = str(exc)
+        return rec
     except Exception as exc:
-        record["status"] = "error"
-        record["error"] = f"{type(exc).__name__}: {exc}"
-        return record
+        rec["status"] = "error"
+        rec["error"] = f"{type(exc).__name__}: {exc}"
+        return rec
 
 
 def write_csv_from_jsonl(jsonl_path: Path, csv_path: Path) -> None:
@@ -326,10 +368,13 @@ def write_csv_from_jsonl(jsonl_path: Path, csv_path: Path) -> None:
         "changed_pixels",
         "base_alpha_zero_pixels",
         "base_alpha_semitransparent_pixels",
+        "base_alpha_not_opaque_pixels",
         "base_alpha_changed_pixels",
         "base_rgb_changed_pixels",
         "unused_alpha_positive_pixels",
         "unused_rgb_nonzero_pixels",
+        "unused_changed_pixels",
+        "overlay_alpha_zero_pixels",
         "overlay_alpha_zero_rgb_nonzero_pixels",
         "overlay_rgb_changed_pixels",
         "error",
@@ -338,67 +383,115 @@ def write_csv_from_jsonl(jsonl_path: Path, csv_path: Path) -> None:
     with jsonl_path.open("r", encoding="utf-8") as src, csv_path.open("w", newline="", encoding="utf-8") as dst:
         writer = csv.DictWriter(dst, fieldnames=fields)
         writer.writeheader()
-
         for line in src:
             if not line.strip():
                 continue
             rec = json.loads(line)
-            writer.writerow({key: rec.get(key) for key in fields})
+            writer.writerow({field: rec.get(field) for field in fields})
 
 
 def write_summary_from_jsonl(jsonl_path: Path, summary_path: Path) -> None:
-    counters: dict[str, int] = {}
-    numeric_sums: dict[str, int] = {}
-
-    sum_keys = [
+    status_counts: dict[str, int] = {}
+    sums: dict[str, int] = {}
+    sum_fields = [
         "changed_pixels",
         "base_alpha_zero_pixels",
         "base_alpha_semitransparent_pixels",
+        "base_alpha_not_opaque_pixels",
         "base_alpha_changed_pixels",
         "base_rgb_changed_pixels",
         "unused_alpha_positive_pixels",
         "unused_rgb_nonzero_pixels",
+        "unused_changed_pixels",
+        "overlay_alpha_zero_pixels",
         "overlay_alpha_zero_rgb_nonzero_pixels",
         "overlay_rgb_changed_pixels",
     ]
 
     total = 0
-    with jsonl_path.open("r", encoding="utf-8") as f:
-        for line in f:
+    with jsonl_path.open("r", encoding="utf-8") as src:
+        for line in src:
             if not line.strip():
                 continue
             rec = json.loads(line)
             total += 1
+
             status = str(rec.get("status", "unknown"))
-            counters[status] = counters.get(status, 0) + 1
-            for key in sum_keys:
-                value = rec.get(key)
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+            for field in sum_fields:
+                value = rec.get(field)
                 if isinstance(value, int):
-                    numeric_sums[key] = numeric_sums.get(key, 0) + value
+                    sums[field] = sums.get(field, 0) + value
 
     summary = {
         "total_records": total,
-        "status_counts": dict(sorted(counters.items())),
-        "sums": numeric_sums,
+        "status_counts": dict(sorted(status_counts.items())),
+        "sums": sums,
     }
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def self_test_quantization() -> None:
+    rgb = np.array([[255, 13, 142], [10, 20, 30], [255, 255, 255]], dtype=np.uint8)
+    alpha = np.array([2, 0, 255], dtype=np.uint8)
+    got = quantize_inner_layer_rgb(rgb, alpha)
+    expected = np.array([[255, 0, 128], [0, 0, 0], [255, 255, 255]], dtype=np.uint8)
+    if not np.array_equal(got, expected):
+        raise AssertionError(f"quantization self-test failed: got={got.tolist()}, expected={expected.tolist()}")
+
+    masks = build_java_wide_arm_masks(64, 64)
+
+    # Head base top-row corners must be unused.
+    assert masks.unused[0, 0]
+    assert masks.unused[0, 7]
+    assert masks.unused[0, 24]
+    assert masks.unused[0, 31]
+
+    # Head top/bottom faces must be base.
+    assert masks.base[0, 8]
+    assert masks.base[0, 23]
+
+    # Body top-row corners must be unused.
+    assert masks.unused[16, 16]
+    assert masks.unused[16, 39]
+
+    # Right arm top-row corners must be unused.
+    assert masks.unused[16, 40]
+    assert masks.unused[16, 55]
+
+    # Left leg and left arm lower-row top corners must be unused.
+    assert masks.unused[48, 16]
+    assert masks.unused[48, 31]
+    assert masks.unused[48, 32]
+    assert masks.unused[48, 47]
+
+    print("self-test passed")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Canonicalize Minecraft Java Edition skin PNGs using wide-arm UV constraints."
     )
-    parser.add_argument("--input", type=Path, required=True, help="Input PNG file or directory.")
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/java_skins"), help="Output directory.")
-    parser.add_argument("--recursive", action="store_true", help="Process PNG files recursively when input is a directory.")
-    parser.add_argument("--in-place", action="store_true", help="Overwrite input files atomically. Use with care.")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files.")
-    parser.add_argument("--dry-run", action="store_true", help="Do not write images; only write logs.")
-    parser.add_argument("--resume", action="store_true", help="Skip files already present in the JSONL log.")
-    parser.add_argument("--copy-unsupported", action="store_true", help="Copy unsupported-size PNGs unchanged to output-dir.")
+    parser.add_argument("--input", type=Path, required=False, help="Input PNG file or directory.")
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/java_skins"))
     parser.add_argument("--log-dir", type=Path, default=Path("outputs/java_skin_canonicalize_logs"))
-    parser.add_argument("--checkpoint-every", type=int, default=1000, help="Flush logs every N files.")
+    parser.add_argument("--recursive", action="store_true")
+    parser.add_argument("--in-place", action="store_true", help="Overwrite input files atomically.")
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--copy-unsupported", action="store_true")
+    parser.add_argument("--checkpoint-every", type=int, default=1000)
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+
+    if args.self_test:
+        self_test_quantization()
+        return
+
+    if args.input is None:
+        raise SystemExit("--input is required unless --self-test is used")
 
     input_path = args.input.resolve()
     if not input_path.exists():
@@ -419,16 +512,15 @@ def main() -> None:
         print(f"No PNG files found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
-    processed = load_processed_paths(jsonl_path) if args.resume else set()
+    processed = load_processed_sources(jsonl_path) if args.resume else set()
     to_process = [p for p in files if str(p) not in processed]
 
     mode = "a" if args.resume else "w"
     with jsonl_path.open(mode, encoding="utf-8") as log:
         progress = tqdm(to_process, desc="Canonicalizing Java skins", unit="file")
-
-        for i, path in enumerate(progress, start=1):
+        for i, source in enumerate(progress, start=1):
             rec = process_one(
-                path,
+                source,
                 input_root=input_path,
                 output_dir=args.output_dir,
                 in_place=args.in_place,
